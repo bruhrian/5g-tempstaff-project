@@ -18,8 +18,9 @@ async def run_gmail_agent() -> str:
     print(f"gmail called!")
 
 @agent_mcp.tool
-async def run_database_agent() -> str: 
-    print(f"DB agent called!")
+async def run_database_agent(query: str) -> str: 
+    response = await dba_response(query=query)
+    return response
 
 @agent_mcp.tool
 async def RAG_agent() -> str: 
