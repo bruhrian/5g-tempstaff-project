@@ -1,154 +1,130 @@
-# Issues
-# 1. Memory not memorying
-
 from langchain_ollama import ChatOllama
-from dotenv import load_dotenv
-from pydantic import BaseModel
-import os, time, uuid, sqlite3
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
+from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, BaseMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_community.chat_message_histories import SQLChatMessageHistory
 from mcp.client.streamable_http import streamable_http_client
 from mcp import ClientSession
-from langchain_community.chat_message_histories import SQLChatMessageHistory
-from langchain_classic.memory import ConversationBufferMemory
-from langchain_core.messages import SystemMessage
+from dotenv import load_dotenv
 from pathlib import Path
-
+import os, time, sqlite3
 
 load_dotenv()
-orchestrator_prompt = os.getenv('orc_prompt')
-model="gemma4:e4b"
-DB_PATH = os.getenv('orc_memory_db')
-if not DB_PATH:
-    DB_PATH = './data/conveconversations.db'  # Default fallback
-    print(f"Warning: orc_memory_db not set, using default: {DB_PATH}")
 
-class orchestrator_Response(BaseModel):
-    response: str
-    tools_used: list[str]
-    sources: list[str]
-    
-async def get_mcp_tools():
-    async with streamable_http_client("http://localhost:8015/mcp") as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tools = await load_mcp_tools(session)
-            return tools
+ORCHESTRATOR_PROMPT_PATH = os.getenv('orc_prompt')
+MODEL = "gemma4:e4b"
+MCP_SERVER_IP = os.getenv('mcp_server_ip')
 
-def get_sqlite_memory(session_id: str, db_path: str = None):
-    if db_path is None:
-        db_path = DB_PATH
+_raw_db_path = os.getenv('orc_memory_db') or './data/conversations.db'
+DB_PATH = str(Path(_raw_db_path))
 
-    connection_string = f"sqlite:///{db_path}"
+DEFAULT_SESSION_ID = "orchestrator-default-session"
 
+if not os.getenv('orc_memory_db'):
+    print(f"⚠️  Warning: orc_memory_db not set, using default: {DB_PATH}")
+else:
+    print(f"✅ orc_memory_db resolved to: {DB_PATH}")
+
+def init_sqlite_db(db_path: str = DB_PATH) -> bool:
+    try:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("SELECT 1")
+        conn.close()
+        print(f"✅ SQLite DB ready at: {db_path}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to initialise SQLite DB at '{db_path}': {e}")
+        return False
+
+def get_session_history(session_id: str, db_path: str = DB_PATH) -> SQLChatMessageHistory:
     return SQLChatMessageHistory(
         session_id=session_id,
-        connection_string=connection_string
+        connection_string=f"sqlite:///{db_path}"
     )
 
-def init_sqlite_db(db_path: str = None):
-    if db_path is None:
-        db_path = DB_PATH
 
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS message_store (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            message TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            message_type TEXT,
-            additional_kwargs TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+def log_session_history(session_id: str, db_path: str = DB_PATH) -> None:
+    history = get_session_history(session_id, db_path)
+    messages: list[BaseMessage] = history.messages
+    print(f"\n🔍 Chat history for session [{session_id}]:")
+    if not messages:
+        print("   ⚠️  No prior messages (normal for a new session)")
+        return
+    print(f"   {len(messages)} message(s) loaded:")
+    for i, msg in enumerate(messages):
+        preview = str(msg.content)[:120]
+        if len(str(msg.content)) > 120:
+            preview += "..."
+        print(f"   [{i}] {type(msg).__name__}: {preview}")
 
-async def orchestrator_response(query: str,
-                                session_id: str = None, 
-                                db_path: str = None):
-    init_sqlite_db(db_path)
-    
-    if not session_id:
-        session_id = str(uuid.uuid4())
+async def orchestrator_response(
+    query: str,
+    session_id: str | None = None,
+    db_path: str = DB_PATH
+) -> dict:
 
-
-    llm = ChatOllama(
-        model=model
-    )
-
-    with open(orchestrator_prompt, 'r', encoding='utf-8') as f:
-        orchestrator_prompt_content = f.read()
-    
-    prompt = ChatPromptTemplate.from_messages(
-        [
-        ("system", orchestrator_prompt_content),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),  # Fix: change to plain string tuple
-    ]
-    )
-
-    tools = await get_mcp_tools()
-
-    agent = create_tool_calling_agent(
-        llm=llm,
-        prompt=prompt,
-        tools=tools
-    )
-    
-    message_history = get_sqlite_memory(session_id, db_path)
-    memory = ConversationBufferMemory(
-        chat_memory=message_history,
-        memory_key="chat_history",
-        return_messages=True
-    )
-
-    loaded_memory = memory.load_memory_variables({})
-    print(f"🔍 Loaded chat_history for session {session_id}:")
-    print(f"   Number of messages: {len(loaded_memory.get('chat_history', []))}")
-    if loaded_memory.get('chat_history'):
-        for i, msg in enumerate(loaded_memory['chat_history']):
-            preview = str(msg)[:100] + "..." if len(str(msg)) > 100 else str(msg)
-            print(f"   [{i}] {type(msg).__name__}: {preview}")
-    else:
-        print(f"   ⚠️ No chat history loaded (this is normal for first message)")
-
-    agent_exe = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        memory=memory,
-        verbose=False,
-        handle_parsing_errors=True,
-        max_iterations=5,
-        early_stopping_method="force"
-    )
-
-    try:
-        start_time = time.time()
-        raw_res = agent_exe.invoke({"input": query})
-        output = raw_res.get("output", "")
-        
-        elapsed = time.time() - start_time
-        
-        print(f"Response: {output}")
-        print(f"Elapsed time - {elapsed:.2f} seconds")
-        print(f"Session ID: {session_id}")
-        
+    if not init_sqlite_db(db_path):
         return {
-            "result": output,
-            "session_id": session_id,
-            "elapsed_time": elapsed
-        }
-
-    except Exception as e:
-        print(f"Error in agent execution: {e}")
-        return {
-            "result": f"Error processing request: {str(e)}",
-            "error": str(e),
+            "result": "Agent could not start: memory database failed to initialise.",
+            "error": "DB init failure",
             "session_id": session_id
         }
+
+    if not session_id:
+        session_id = DEFAULT_SESSION_ID
+        print(f"ℹ️  No session_id provided — using default: [{session_id}]")
+    else:
+        print(f"🔄 Resuming session: [{session_id}]")
+
+    log_session_history(session_id, db_path)
+
+    with open(ORCHESTRATOR_PROMPT_PATH, 'r', encoding='utf-8') as f:
+        system_prompt = f.read()
+
+    llm = ChatOllama(model=MODEL)
+
+    async with streamable_http_client(MCP_SERVER_IP) as (read, write, _):
+        async with ClientSession(read, write) as mcp_session:
+            await mcp_session.initialize()
+            tools = await load_mcp_tools(mcp_session)
+
+            agent = create_react_agent(
+                model=llm,
+                tools=tools,
+                prompt=system_prompt,
+            )
+
+            history = get_session_history(session_id, db_path)
+            messages_in = history.messages + [HumanMessage(content=query)]
+
+            print(f"📨 Sending {len(messages_in)} message(s) to agent "f"({len(history.messages)} from history + 1 new)")
+
+            try:
+                start_time = time.time()
+
+                raw_res = await agent.ainvoke({"messages": messages_in})
+                output = raw_res["messages"][-1].content
+                elapsed = time.time() - start_time
+
+                history.add_user_message(query)
+                history.add_ai_message(output)
+                print(f"💾 Turn saved to DB (session: {session_id})")
+
+                print(f"\n💬 Response : {output}")
+                print(f"⏱️  Elapsed  : {elapsed:.2f}s")
+                print(f"🗂️  Session  : {session_id}")
+
+                return {
+                    "result": output,
+                    "session_id": session_id, 
+                    "elapsed_time": elapsed
+                }
+
+            except Exception as e:
+                print(f"❌ Agent execution error: {e}")
+                return {
+                    "result": f"Error processing request: {str(e)}",
+                    "error": str(e),
+                    "session_id": session_id
+                }
