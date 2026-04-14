@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import os, re
 
 load_dotenv()
+SQL_prompt = os.getenv('db_manager_prompt')
 
 PG_HOST            = os.getenv("PG_HOST")
 PG_PORT            = os.getenv("PG_PORT")
@@ -133,13 +134,15 @@ def _execute_write(sql: str) -> str:
         )
     return f"✅ Success — {rowcount} row(s) affected."
 
+def _load_prompt(query: str) -> str:
+    with open(SQL_prompt, "r", encoding="utf-8") as f:
+        template = f.read()
+    return template.replace("{query}", query)
+
 async def _nl_write_query(query: str) -> str:
     qe = _get_query_engine()
 
-    generate_sql_prompt = (
-        f"Generate only the SQL statement (no explanation) to perform this operation: {query}\n"
-        "Return only the raw SQL, nothing else."
-    )
+    generate_sql_prompt = _load_prompt(query)
 
     llm: Ollama = Settings.llm
     sql_response = llm.complete(generate_sql_prompt)
