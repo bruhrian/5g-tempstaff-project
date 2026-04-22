@@ -1,7 +1,21 @@
 # 5g-tempstaff-project
 CCTV IoT x MCP project: No-code end-user agentic framework
 
+## 🏗️ System Architecture
+
 <img width="668" height="426" alt="image" src="https://github.com/user-attachments/assets/18242dad-922a-4c01-a8dd-df633d3a8c46" />
+
+###
+- Orchestrator: Delgates tasks to sub-agents and use available tools via MCP server & configuration.
+- Sub-agents: Use tools available to them to deliver the tasks given by the orchestrator.
+- Tools: Only serves a type of function per tool
+ 
+###
+## 📚 User Interface(Sandbox)
+<img width="955" height="614" alt="image" src="https://github.com/user-attachments/assets/260ce35d-60e7-4ea3-9884-23f34c8a398b" />
+
+Credits: inspired by n8n's AI workflow user interface
+
 
 ### Installation
 ```bash
