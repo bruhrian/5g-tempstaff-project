@@ -1,4 +1,4 @@
-# Create a React App & Replace Base JSX with current TSX（inside scripts)
+# Create a React App & Replace Base JSX with current TSX（inside src folder in repo)
 
 ## Prerequisites
 
