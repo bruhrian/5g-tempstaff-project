@@ -20,7 +20,7 @@ npm install
 cd ..
 
 # Set up frontend(telegram)
-python Telegram.py
+python telegram.py
 
 # Configure environment variables
 cp .env.example .env
