@@ -30,6 +30,7 @@ pip install -r requirements.txt
 
 # Set up & run frontend(sandbox)
 mkdir frontend
+cd "frontend"
 # flw the instructions in documentation folder
 
 # run frontend(telegram)
