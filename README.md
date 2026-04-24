@@ -28,12 +28,11 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Set up frontend(sandbox)
-cd frontend
-npm install
-cd ..
+# Set up & run frontend(sandbox)
+mkdir frontend
+# flw the instructions in documentation folder
 
-# Set up frontend(telegram)
+# run frontend(telegram)
 python telegram.py
 
 # Configure environment variables
@@ -45,7 +44,8 @@ Run MCP server
 cd "backend"
 python mcp-server.py
 
-Running the System
+Running the Backend
 # Start backend services
-python xxx
+cd "backend"
+python backend.py
 ```
