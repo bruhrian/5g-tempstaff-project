@@ -1,4 +1,4 @@
-# Uploading Documents through QingRAG
+# Uploading Documents to QingRAG
 
 This guide explains how to ingest PDF documents into the RAG system using `QingRAG.py`.
 
@@ -33,17 +33,12 @@ When you call `process_folder()`, each PDF in the target folder is:
 
 ## Ingesting Documents from a Separate Script
 
-Place your PDFs in any folder, then create a new script (e.g., `ingest.py`) and import directly from `QingRAG.py`.
+Place your PDFs in any folder, then create a new script (e.g., `ingest.py`) anywhere on your machine.
 
 ```python
 # ingest.py
 import asyncio
-import sys
-
-# Add the tools directory to path so QingRAG can be imported
-sys.path.append(r"D:\brian\5g lab\backend\agents\tools")
-
-from QingRAG import rag, process_folder
+from backend.agents.tools import rag, process_folder
 from lightrag.kg.shared_storage import initialize_pipeline_status
 
 FOLDER_PATH = r"D:\path\to\your\pdfs"  # Change this to your PDF folder
@@ -69,11 +64,7 @@ If you only want to insert one specific file rather than a whole folder:
 
 ```python
 import asyncio
-import sys
-
-sys.path.append(r"D:\brian\5g lab\backend\agents\tools")
-
-from QingRAG import rag, process_pdf
+from backend.agents.tools import rag, process_pdf
 from lightrag.kg.shared_storage import initialize_pipeline_status
 
 FILE_PATH = r"D:\path\to\your\document.pdf"
