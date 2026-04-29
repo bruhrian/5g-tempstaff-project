@@ -45,8 +45,7 @@ Run MCP server
 cd "backend"
 python mcp-server.py
 
-Running the Backend
-# Start backend services
-cd "backend"
-python backend.py
+Run Application(frontend + backend)
+# Use Git bash
+bash start.sh
 ```
