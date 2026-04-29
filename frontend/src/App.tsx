@@ -1,4 +1,69 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import LoginPage from "./LoginPage";
+import RegisterPage from "./RegisterPage";
+
+// ─── Auth state ───────────────────────────────────────────────────────────────
+type Page = "login" | "register" | "app";
+
+function useAuth() {
+  const [page, setPage] = useState<Page>("login");
+  const [checking, setChecking] = useState(true);
+
+  // On first load, check if there's already a valid session
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/users/me", { credentials: "include" })
+      .then(res => {
+        if (res.ok) setPage("app");
+        else setPage("login");
+      })
+      .catch(() => setPage("login"))
+      .finally(() => setChecking(false));
+  }, []);
+
+  return { page, setPage, checking };
+}
+
+// ─── Main export ──────────────────────────────────────────────────────────────
+export default function App() {
+  const { page, setPage, checking } = useAuth();
+
+  if (checking) {
+    return (
+      <div style={{
+        minHeight: "100vh", background: "#F8FAFC",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontFamily: "'Segoe UI', system-ui, sans-serif",
+      }}>
+        <div style={{ color: "#94A3B8", fontSize: 14 }}>Loading…</div>
+      </div>
+    );
+  }
+
+  if (page === "login") {
+    return (
+      <LoginPage
+        onLoginSuccess={() => setPage("app")}
+        onGoToRegister={() => setPage("register")}
+      />
+    );
+  }
+
+  if (page === "register") {
+    return (
+      <RegisterPage
+        onGoToLogin={() => setPage("login")}
+      />
+    );
+  }
+
+  return <WorkflowApp onLogout={() => setPage("login")} />;
+}
+
+// ─── The rest of your existing app, wrapped in WorkflowApp ───────────────────
+// Pass onLogout down so the sidebar avatar button can log the user out.
+function WorkflowApp({ onLogout }: { onLogout: () => void }) {
+
+  // ── All your existing state & logic below (unchanged) ────────────────────
 
 const NODE_TYPES = {
   trigger:   { color: "#FF6D5A", bg: "#FFF0EE", label: "Trigger" },
@@ -46,7 +111,6 @@ const INITIAL_EDGES = [
 
 const NODE_W = 180;
 const NODE_H = 76;
-// Port radius — bigger for easier grabbing
 const PORT_R = 9;
 
 function getCat(nodeId) {
@@ -59,19 +123,16 @@ function bezier(s, e)  {
   return `M${s.x},${s.y} C${cx},${s.y} ${cx},${e.y} ${e.x},${e.y}`;
 }
 
-// ─── Edge ────────────────────────────────────────────────────────────────────
 function EdgePath({ edge, nodes, selected, onClick }) {
   const from = nodes.find(n => n.id === edge.from);
   const to   = nodes.find(n => n.id === edge.to);
   if (!from || !to) return null;
-
   const s  = outPort(from);
   const e  = inPort(to);
   const d  = bezier(s, e);
   const mx = (s.x + e.x) / 2;
   const my = (s.y + e.y) / 2;
   const disabled = !from.enabled || !to.enabled;
-
   return (
     <g style={{ cursor: "pointer" }} onClick={ev => { ev.stopPropagation(); onClick(edge.id); }}>
       <path d={d} fill="none" stroke="transparent" strokeWidth={16} />
@@ -101,13 +162,11 @@ function EdgePath({ edge, nodes, selected, onClick }) {
   );
 }
 
-// ─── Node ─────────────────────────────────────────────────────────────────────
 function WorkflowNode({ node, selected, onSelect, onDrag, onStartEdge }) {
   const cat  = getCat(node.nodeId);
   const type = NODE_TYPES[cat.type];
   const dragRef = useRef(null);
   const didDrag = useRef(false);
-
   const STATUS_COLOR = { active: "#36B37E", success: "#0052CC", error: "#E53E3E", idle: "#94A3B8" };
   const isDisabled = !node.enabled;
 
@@ -135,444 +194,336 @@ function WorkflowNode({ node, selected, onSelect, onDrag, onStartEdge }) {
     onStartEdge(node.id, outPort(node));
   }
 
-  const op = outPort(node);
-  const ip = inPort(node);
-
   return (
-    <g opacity={isDisabled ? 0.45 : 1}>
-      {/* Input port */}
-      <circle cx={ip.x} cy={ip.y} r={PORT_R} fill="white" stroke={selected ? type.color : "#CBD5E1"} strokeWidth={2} style={{ pointerEvents: "none" }} />
-      <circle cx={ip.x} cy={ip.y} r={4} fill={selected ? type.color : "#CBD5E1"} style={{ pointerEvents: "none" }} />
-
-      {/* Node body */}
-      <g transform={`translate(${node.x},${node.y})`} onMouseDown={handleBodyMouseDown} style={{ cursor: "grab" }}>
-        <rect width={NODE_W} height={NODE_H} rx={12} fill="white"
-          stroke={selected ? type.color : isDisabled ? "#E2E8F0" : "#E2E8F0"}
-          strokeWidth={selected ? 2.5 : 1}
-          style={{ filter: selected ? `drop-shadow(0 0 10px ${type.color}55)` : "drop-shadow(0 2px 6px rgba(0,0,0,0.07))" }}
-        />
-        {/* Left color accent bar */}
-        <rect x={0} y={0} width={5} height={NODE_H} rx={3} fill={isDisabled ? "#CBD5E1" : type.color} />
-        {/* Icon box */}
-        <rect x={14} y={14} width={38} height={38} rx={9} fill={isDisabled ? "#F1F5F9" : type.bg} />
-        <text x={33} y={38} textAnchor="middle" fontSize={18} style={{ pointerEvents: "none" }}>{cat.icon}</text>
-        {/* Name */}
-        <text x={62} y={32} fontSize={13} fontWeight={700} fill={isDisabled ? "#94A3B8" : "#1E293B"} fontFamily="'Inter',sans-serif" style={{ pointerEvents: "none" }}>
-          {node.name.length > 13 ? node.name.slice(0, 13) + "…" : node.name}
-        </text>
-        {/* Type label */}
-        <text x={62} y={50} fontSize={10} fill={isDisabled ? "#CBD5E1" : "#94A3B8"} fontFamily="'Inter',sans-serif" style={{ pointerEvents: "none" }}>{type.label}</text>
-        {/* Status dot */}
-        <circle cx={NODE_W - 14} cy={16} r={6} fill={isDisabled ? "#E2E8F0" : (STATUS_COLOR[node.status] || "#94A3B8")} style={{ pointerEvents: "none" }} />
-        {/* Disabled badge */}
-        {isDisabled && (
-          <>
-            <rect x={62} y={56} width={42} height={14} rx={7} fill="#F1F5F9" />
-            <text x={83} y={66} textAnchor="middle" fontSize={9} fill="#94A3B8" fontWeight={700} style={{ pointerEvents: "none" }}>DISABLED</text>
-          </>
-        )}
-      </g>
-
-      {/* Output port — big, easy to grab */}
-      <g onMouseDown={handlePortMouseDown} style={{ cursor: "crosshair" }}>
-        {/* Invisible fat hit area */}
-        <circle cx={op.x} cy={op.y} r={PORT_R + 6} fill="transparent" />
-        {/* Visible ring */}
-        <circle cx={op.x} cy={op.y} r={PORT_R} fill="white" stroke={selected ? type.color : "#CBD5E1"} strokeWidth={2} />
-        {/* Inner dot / plus */}
-        <circle cx={op.x} cy={op.y} r={4} fill={selected ? type.color : "#94A3B8"} />
-        <text x={op.x} y={op.y + 4} textAnchor="middle" fontSize={10} fontWeight={700} fill="white" style={{ pointerEvents: "none" }}>+</text>
-      </g>
+    <g opacity={isDisabled ? 0.55 : 1}>
+      <rect x={node.x} y={node.y} width={NODE_W} height={NODE_H} rx={10}
+        fill="white"
+        stroke={selected ? "#7B61FF" : "#E2E8F0"}
+        strokeWidth={selected ? 2 : 1}
+        style={{ filter: selected ? "drop-shadow(0 0 8px rgba(123,97,255,0.25))" : "drop-shadow(0 1px 3px rgba(0,0,0,0.08))", cursor: "grab" }}
+        onMouseDown={handleBodyMouseDown}
+      />
+      <rect x={node.x} y={node.y} width={4} height={NODE_H} rx={2} fill={type.color} style={{ pointerEvents: "none" }} />
+      <circle cx={node.x} cy={node.y + NODE_H / 2} r={PORT_R}
+        fill="white" stroke={type.color} strokeWidth={2}
+        style={{ cursor: "default", pointerEvents: "none" }}
+      />
+      <rect x={node.x + 14} y={node.y + 10} width={28} height={28} rx={7} fill={type.bg} style={{ pointerEvents: "none" }} />
+      <text x={node.x + 28} y={node.y + 29} textAnchor="middle" fontSize={14} style={{ pointerEvents: "none" }}>{cat.icon}</text>
+      <text x={node.x + 52} y={node.y + 24} fontSize={12} fontWeight={700} fill={isDisabled ? "#94A3B8" : "#1E293B"} fontFamily="inherit" style={{ pointerEvents: "none" }}>{node.name}</text>
+      <text x={node.x + 52} y={node.y + 38} fontSize={10} fill="#94A3B8" fontFamily="inherit" style={{ pointerEvents: "none" }}>
+        {cat.type.charAt(0).toUpperCase() + cat.type.slice(1)}
+        {isDisabled ? " · DISABLED" : ""}
+      </text>
+      <circle cx={node.x + NODE_W - 14} cy={node.y + 14} r={4} fill={STATUS_COLOR[node.status] || "#94A3B8"} style={{ pointerEvents: "none" }} />
+      <circle cx={node.x + NODE_W} cy={node.y + NODE_H / 2} r={PORT_R}
+        fill="white" stroke={type.color} strokeWidth={2}
+        style={{ cursor: "crosshair" }}
+        onMouseDown={handlePortMouseDown}
+      />
     </g>
   );
 }
 
-// ─── Node Inspector Panel ─────────────────────────────────────────────────────
 function NodePanel({ node, onClose, onUpdate, onDelete }) {
-  const cat  = getCat(node.nodeId);
+  const cat = getCat(node.nodeId);
   const type = NODE_TYPES[cat.type];
-
   return (
-    <div style={{ width: 300, background: "#fff", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-      {/* Header */}
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center", background: node.enabled ? type.bg : "#F8FAFC" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 24 }}>{cat.icon}</span>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 14, color: "#1E293B" }}>{node.name}</div>
-            <div style={{ fontSize: 10, color: type.color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>{type.label}</div>
-          </div>
+    <div style={{ width: 280, background: "white", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: type.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{cat.icon}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1E293B" }}>{node.name}</div>
+          <div style={{ fontSize: 11, color: type.color, fontWeight: 600 }}>{type.label}</div>
         </div>
-        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#94A3B8", padding: 4 }}>✕</button>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#94A3B8" }}>✕</button>
       </div>
-
-      <div style={{ padding: "14px 16px", flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
-
-        {/* Enable / Disable toggle — per-node activation */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: node.enabled ? "#E6F9F2" : "#FFF5F5", padding: "10px 14px", borderRadius: 10, border: `1px solid ${node.enabled ? "#BBF7D0" : "#FECACA"}` }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: node.enabled ? "#166534" : "#991B1B" }}>
-              {node.enabled ? "Node Enabled" : "Node Disabled"}
-            </div>
-            <div style={{ fontSize: 11, color: node.enabled ? "#4ADE80" : "#F87171", marginTop: 1 }}>
-              {node.enabled ? "This node will run in the workflow" : "This node will be skipped"}
-            </div>
-          </div>
+      <div style={{ padding: 16, flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "#94A3B8", marginBottom: 6 }}>DESCRIPTION</div>
+          <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>{node.desc}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "#94A3B8", marginBottom: 6 }}>NAME</div>
+          <input defaultValue={node.name}
+            onBlur={e => onUpdate(node.id, { name: e.target.value })}
+            style={{ width: "100%", padding: "7px 10px", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+            onFocus={e => e.target.style.borderColor = "#7B61FF"}
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>Enabled</div>
           <div onClick={() => onUpdate(node.id, { enabled: !node.enabled })}
-            style={{ width: 44, height: 24, borderRadius: 12, background: node.enabled ? "#22C55E" : "#E2E8F0", cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
-            <div style={{ position: "absolute", top: 3, left: node.enabled ? 22 : 3, width: 18, height: 18, borderRadius: "50%", background: "white", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
+            style={{ width: 36, height: 20, borderRadius: 10, background: node.enabled ? "#7B61FF" : "#E2E8F0", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
+            <div style={{ position: "absolute", top: 2, left: node.enabled ? 18 : 2, width: 16, height: 16, borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
           </div>
-        </div>
-
-        {/* Node Name */}
-        <div>
-          <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>Node Name</label>
-          <input value={node.name} onChange={e => onUpdate(node.id, { name: e.target.value })}
-            style={{ width: "100%", marginTop: 6, padding: "8px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 13, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }}
-            onFocus={e => e.target.style.borderColor = "#7B61FF"}
-            onBlur={e => e.target.style.borderColor = "#E2E8F0"}
-          />
-        </div>
-
-        {/* Description — editable */}
-        <div>
-          <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>Description</label>
-          <textarea
-            value={node.desc || ""}
-            onChange={e => onUpdate(node.id, { desc: e.target.value })}
-            rows={3}
-            placeholder="Add a description for this node…"
-            style={{ width: "100%", marginTop: 6, padding: "8px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 13, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", color: "#475569", lineHeight: 1.5 }}
-            onFocus={e => e.target.style.borderColor = "#7B61FF"}
-            onBlur={e => e.target.style.borderColor = "#E2E8F0"}
-          />
-        </div>
-
-        {/* Webhook URL for trigger nodes */}
-        {cat.type === "trigger" && (
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>Webhook URL</label>
-            <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
-              <input readOnly value="https://hooks.example.com/abc123"
-                style={{ flex: 1, padding: "8px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 11, background: "#F8FAFC", color: "#475569", fontFamily: "monospace" }} />
-              <button style={{ padding: "8px 12px", background: "#7B61FF", color: "white", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Copy</button>
-            </div>
-          </div>
-        )}
-
-        {/* Execution status */}
-        <div>
-          <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>Execution Status</label>
-          <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {["idle", "active", "success", "error"].map(s => {
-              const colors = { idle: ["#F1F5F9","#94A3B8","#E2E8F0"], active: ["#E6F9F2","#166534","#BBF7D0"], success: ["#EFF6FF","#1D4ED8","#BFDBFE"], error: ["#FFF5F5","#991B1B","#FECACA"] };
-              const [bg, text, border] = node.status === s ? colors[s] : ["white","#94A3B8","#E2E8F0"];
-              return (
-                <button key={s} onClick={() => onUpdate(node.id, { status: s })}
-                  style={{ padding: "5px 12px", borderRadius: 20, fontSize: 11, border: `1px solid ${border}`, background: bg, color: text, cursor: "pointer", textTransform: "capitalize", fontWeight: node.status === s ? 700 : 400 }}>
-                  {s}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Last execution info */}
-        <div style={{ background: "#F8FAFC", borderRadius: 8, padding: "12px 14px", border: "1px solid #E2E8F0" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Last Execution</div>
-          <div style={{ fontSize: 12, color: "#475569" }}>⏱ Duration: <strong>142ms</strong></div>
-          <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>📦 Items processed: <strong>3</strong></div>
-          <div style={{ fontSize: 12, color: "#36B37E", marginTop: 4 }}>✓ Completed successfully</div>
         </div>
       </div>
-
-      {/* Footer */}
       <div style={{ padding: "12px 16px", borderTop: "1px solid #E2E8F0" }}>
         <button onClick={() => onDelete(node.id)}
-          style={{ width: "100%", padding: "9px", background: "#FFF5F5", color: "#E53E3E", border: "1px solid #FECACA", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
-          🗑 Delete Node
+          style={{ width: "100%", padding: "8px", background: "#FFF0EE", color: "#EF4444", border: "1px solid #FECACA", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
+          Delete Node
         </button>
       </div>
     </div>
   );
 }
 
-// ─── Add Node Panel ───────────────────────────────────────────────────────────
-function AddNodePanel({ onAdd, onClose }) {
-  const [search, setSearch] = useState("");
-  const [tab, setTab] = useState("all");
-  const filtered = NODE_CATALOG.filter(n =>
-    (tab === "all" || n.type === tab) &&
-    (n.name.toLowerCase().includes(search.toLowerCase()) || n.desc.toLowerCase().includes(search.toLowerCase()))
-  );
+function EdgePanel({ edge, onClose, onUpdate, onDelete }) {
   return (
-    <div style={{ width: 280, background: "#fff", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontWeight: 700, fontSize: 14, color: "#1E293B" }}>Add Node</span>
-        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#94A3B8" }}>✕</button>
+    <div style={{ width: 280, background: "white", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#1E293B" }}>Connection</div>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#94A3B8" }}>✕</button>
       </div>
-      <div style={{ padding: "10px 12px", borderBottom: "1px solid #E2E8F0" }}>
-        <input placeholder="Search nodes…" value={search} onChange={e => setSearch(e.target.value)} autoFocus
-          style={{ width: "100%", padding: "8px 12px", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", background: "#F8FAFC", outline: "none", fontFamily: "inherit" }}
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "#94A3B8", marginBottom: 6 }}>LABEL</div>
+          <input defaultValue={edge.label}
+            onBlur={e => onUpdate(edge.id, { label: e.target.value })}
+            placeholder="true / false / …"
+            style={{ width: "100%", padding: "7px 10px", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+            onFocus={e => e.target.style.borderColor = "#7B61FF"}
+          />
+        </div>
+      </div>
+      <div style={{ padding: "12px 16px", borderTop: "1px solid #E2E8F0", marginTop: "auto" }}>
+        <button onClick={() => onDelete(edge.id)}
+          style={{ width: "100%", padding: "8px", background: "#FFF0EE", color: "#EF4444", border: "1px solid #FECACA", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
+          Delete Connection
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddNodePanel({ onAdd, onClose }) {
+  const [filter, setFilter] = useState("");
+  const filtered = NODE_CATALOG.filter(n =>
+    n.name.toLowerCase().includes(filter.toLowerCase()) ||
+    n.type.toLowerCase().includes(filter.toLowerCase())
+  );
+  const grouped = ["trigger","action","condition","transform","output"].map(t => ({
+    type: t, items: filtered.filter(n => n.type === t)
+  })).filter(g => g.items.length > 0);
+
+  return (
+    <div style={{ width: 280, background: "white", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#1E293B" }}>Add Node</div>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#94A3B8" }}>✕</button>
+      </div>
+      <div style={{ padding: "10px 16px", borderBottom: "1px solid #E2E8F0" }}>
+        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Search nodes…"
+          style={{ width: "100%", padding: "7px 10px", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
           onFocus={e => e.target.style.borderColor = "#7B61FF"}
           onBlur={e => e.target.style.borderColor = "#E2E8F0"}
         />
       </div>
-      <div style={{ display: "flex", gap: 4, padding: "7px 10px", borderBottom: "1px solid #E2E8F0", flexWrap: "wrap" }}>
-        {["all","trigger","action","condition","transform","output"].map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            style={{ padding: "3px 9px", borderRadius: 20, fontSize: 10, border: "1px solid", borderColor: tab === t ? "#7B61FF" : "#E2E8F0", background: tab === t ? "#EDE9FF" : "white", color: tab === t ? "#7B61FF" : "#64748B", cursor: "pointer", textTransform: "capitalize", fontWeight: tab === t ? 700 : 400 }}>
-            {t}
-          </button>
+      <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+        {grouped.map(group => (
+          <div key={group.type}>
+            <div style={{ padding: "6px 16px 4px", fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.8px" }}>
+              {NODE_TYPES[group.type].label.toUpperCase()}
+            </div>
+            {group.items.map(item => (
+              <button key={item.id} onClick={() => onAdd(item.id)}
+                style={{ width: "100%", padding: "8px 16px", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, textAlign: "left" }}
+                onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
+                onMouseLeave={e => (e.currentTarget.style.background = "none")}>
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: NODE_TYPES[item.type].bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{item.icon}</div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#1E293B" }}>{item.name}</div>
+                  <div style={{ fontSize: 11, color: "#94A3B8" }}>{item.desc}</div>
+                </div>
+              </button>
+            ))}
+          </div>
         ))}
       </div>
-      <div style={{ flex: 1, overflowY: "auto", padding: 6 }}>
-        {filtered.map(cat => {
-          const type = NODE_TYPES[cat.type];
-          return (
-            <button key={cat.id} onClick={() => { onAdd(cat.id); onClose(); }}
-              style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", border: "1px solid transparent", borderRadius: 8, background: "none", cursor: "pointer", textAlign: "left", marginBottom: 2 }}
-              onMouseEnter={e => e.currentTarget.style.background = "#F8FAFC"}
-              onMouseLeave={e => e.currentTarget.style.background = "none"}>
-              <span style={{ fontSize: 20, flexShrink: 0 }}>{cat.icon}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1E293B" }}>{cat.name}</div>
-                <div style={{ fontSize: 11, color: "#94A3B8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cat.desc}</div>
-              </div>
-              <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 12, background: type.bg, color: type.color, fontWeight: 700, flexShrink: 0, textTransform: "capitalize" }}>{cat.type}</span>
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }
 
-// ─── Edge Panel ───────────────────────────────────────────────────────────────
-function EdgePanel({ edge, onClose, onUpdate, onDelete }) {
-  return (
-    <div style={{ width: 260, background: "#fff", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#F8FAFC" }}>
-        <span style={{ fontWeight: 700, fontSize: 14, color: "#1E293B" }}>Connection</span>
-        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#94A3B8" }}>✕</button>
-      </div>
-      <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <div>
-          <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>Label</label>
-          <input value={edge.label || ""} onChange={e => onUpdate(edge.id, { label: e.target.value })}
-            placeholder="e.g. true, false, success…"
-            style={{ width: "100%", marginTop: 6, padding: "8px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 13, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }}
-            onFocus={e => e.target.style.borderColor = "#7B61FF"}
-            onBlur={e => e.target.style.borderColor = "#E2E8F0"}
-          />
-        </div>
-        <div style={{ fontSize: 12, color: "#94A3B8", background: "#F8FAFC", padding: "10px 12px", borderRadius: 8, border: "1px solid #E2E8F0", lineHeight: 1.6 }}>
-          Tip: click the <strong style={{ color: "#EF4444" }}>✕</strong> on the line to delete quickly.
-        </div>
-        <button onClick={() => onDelete(edge.id)}
-          style={{ padding: 9, background: "#FFF5F5", color: "#E53E3E", border: "1px solid #FECACA", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
-          🗑 Delete Connection
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Context Menu ─────────────────────────────────────────────────────────────
 function ContextMenu({ x, y, onAddNode, onClose }) {
   useEffect(() => {
-    function onDown() { onClose(); }
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
+    const h = () => onClose();
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
   }, []);
-
   return (
-    <div onMouseDown={e => e.stopPropagation()}
-      style={{ position: "fixed", top: y, left: x, background: "white", borderRadius: 10, border: "1px solid #E2E8F0", boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "6px", zIndex: 9999, minWidth: 180 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 1, padding: "4px 10px 6px" }}>Canvas</div>
-      <button
-        onClick={() => { onAddNode(); onClose(); }}
-        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", border: "none", borderRadius: 7, background: "none", cursor: "pointer", fontSize: 13, color: "#1E293B", textAlign: "left", fontWeight: 600 }}
-        onMouseEnter={e => e.currentTarget.style.background = "#F0EEFF"}
-        onMouseLeave={e => e.currentTarget.style.background = "none"}>
-        <span style={{ fontSize: 16 }}>➕</span> Add Node
+    <div style={{ position: "fixed", top: y, left: x, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", zIndex: 1000, minWidth: 160, overflow: "hidden" }}>
+      <button onClick={onAddNode}
+        style={{ width: "100%", padding: "9px 14px", background: "none", border: "none", cursor: "pointer", fontSize: 12, textAlign: "left", color: "#1E293B", display: "flex", alignItems: "center", gap: 8 }}
+        onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
+        onMouseLeave={e => (e.currentTarget.style.background = "none")}>
+        <span>＋</span> Add Node
       </button>
     </div>
   );
 }
 
-// ─── App ──────────────────────────────────────────────────────────────────────
-export default function App() {
-  const [nodes,        setNodes]        = useState(INITIAL_NODES);
-  const [edges,        setEdges]        = useState(INITIAL_EDGES);
+  // ── State ─────────────────────────────────────────────────────────────────
+  const [nodes, setNodes]           = useState(INITIAL_NODES);
+  const [edges, setEdges]           = useState(INITIAL_EDGES);
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedEdge, setSelectedEdge] = useState(null);
-  const [rightPanel,   setRightPanel]   = useState(null); // 'node'|'edge'|'add'
-  const [zoom,         setZoom]         = useState(1);
-  const [pan,          setPan]          = useState({ x: 60, y: 30 });
-  const [isActive,     setIsActive]     = useState(true);
-  const [running,      setRunning]      = useState(false);
-  const [showGrid,     setShowGrid]     = useState(true);
-  const [pendingEdge,  setPendingEdge]  = useState(null);
-  const [ctxMenu,      setCtxMenu]      = useState(null); // { x, y }
+  const [rightPanel, setRightPanel] = useState(null);
+  const [zoom, setZoom]             = useState(1);
+  const [pan, setPan]               = useState({ x: 60, y: 30 });
+  const [showGrid, setShowGrid]     = useState(true);
+  const [isActive, setIsActive]     = useState(true);
+  const [running, setRunning]       = useState(false);
+  const [pendingEdge, setPendingEdge] = useState(null);
+  const [ctxMenu, setCtxMenu]       = useState(null);
+  const svgRef                      = useRef(null);
 
-  const svgRef = useRef(null);
-  const panRef = useRef(null);
+  const panRef  = useRef(null);
+  const panelWidth = rightPanel ? 280 : 0;
 
-  // Keyboard delete
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
-      if (["INPUT","TEXTAREA"].includes(document.activeElement.tagName)) return;
-      if (selectedNode) deleteNode(selectedNode);
-      else if (selectedEdge) deleteEdge(selectedEdge);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectedNode, selectedEdge]);
+  const selNode = nodes.find(n => n.id === selectedNode);
+  const selEdge = edges.find(e => e.id === selectedEdge);
 
-  const handleNodeDrag = useCallback((id, x, y) => {
+  function handleNodeSelect(id) {
+    setSelectedNode(id); setSelectedEdge(null); setRightPanel("node");
+  }
+  function handleNodeDrag(id, x, y) {
     setNodes(ns => ns.map(n => n.id === id ? { ...n, x, y } : n));
-  }, []);
-
-  const handleNodeSelect = useCallback((id) => {
-    setSelectedNode(id);
-    setSelectedEdge(null);
-    setRightPanel("node");
-  }, []);
-
+  }
+  function updateNode(id, patch) {
+    setNodes(ns => ns.map(n => n.id === id ? { ...n, ...patch } : n));
+  }
   function deleteNode(id) {
     setNodes(ns => ns.filter(n => n.id !== id));
     setEdges(es => es.filter(e => e.from !== id && e.to !== id));
-    setSelectedNode(null);
-    setRightPanel(null);
+    setSelectedNode(null); setRightPanel(null);
   }
-
-  function updateNode(id, updates) {
-    setNodes(ns => ns.map(n => n.id === id ? { ...n, ...updates } : n));
-  }
-
-  function addNode(nodeId, spawnX, spawnY) {
-    const id = `n${Date.now()}`;
-    let x, y;
-    if (spawnX != null) {
-      // Spawned from right-click position (already in canvas coords)
-      x = spawnX - NODE_W / 2;
-      y = spawnY - NODE_H / 2;
+  function handleEdgeClick(id) {
+    if (id.startsWith("__del__")) {
+      const eid = id.slice(7);
+      setEdges(es => es.filter(e => e.id !== eid));
+      setSelectedEdge(null); setRightPanel(null);
     } else {
-      const rect = svgRef.current?.getBoundingClientRect() || { width: 800, height: 600 };
-      x = (rect.width  / 2 - pan.x) / zoom - NODE_W / 2 + (Math.random() * 60 - 30);
-      y = (rect.height / 2 - pan.y) / zoom - NODE_H / 2 + (Math.random() * 60 - 30);
+      setSelectedEdge(id); setSelectedNode(null); setRightPanel("edge");
     }
-    const cat = getCat(nodeId);
-    setNodes(ns => [...ns, { id, nodeId, x, y, name: cat.name, desc: cat.desc, status: "idle", enabled: true }]);
-    setSelectedNode(id);
-    setRightPanel("node");
   }
-
-  const handleEdgeClick = useCallback((raw) => {
-    if (raw.startsWith("__del__")) {
-      deleteEdge(raw.replace("__del__", ""));
-    } else {
-      setSelectedEdge(raw);
-      setSelectedNode(null);
-      setRightPanel("edge");
-    }
-  }, []);
-
+  function updateEdge(id, patch) {
+    setEdges(es => es.map(e => e.id === id ? { ...e, ...patch } : e));
+  }
   function deleteEdge(id) {
     setEdges(es => es.filter(e => e.id !== id));
-    setSelectedEdge(null);
+    setSelectedEdge(null); setRightPanel(null);
+  }
+  function addNode(nodeId) {
+    const cat = NODE_CATALOG.find(c => c.id === nodeId);
+    const id = "n" + Date.now();
+    setNodes(ns => [...ns, { id, nodeId, x: 200, y: 200, name: cat.name, desc: cat.desc, status: "idle", enabled: true }]);
     setRightPanel(null);
   }
 
-  function updateEdge(id, updates) {
-    setEdges(es => es.map(e => e.id === id ? { ...e, ...updates } : e));
-  }
-
-  function handleStartEdge(fromId, fromPort) {
-    setPendingEdge({ fromId, from: fromPort, mouse: fromPort });
-    function onMove(ev) {
-      const rect = svgRef.current.getBoundingClientRect();
-      setPendingEdge(pe => pe ? { ...pe, mouse: {
-        x: (ev.clientX - rect.left - pan.x) / zoom,
-        y: (ev.clientY - rect.top  - pan.y) / zoom,
-      }} : null);
+  const handleStartEdge = useCallback((fromId, fromPt) => {
+    setPendingEdge({ fromId, from: fromPt, mouse: fromPt });
+    function onMove(e) {
+      const svg = svgRef.current; if (!svg) return;
+      const r = svg.getBoundingClientRect();
+      const mx = (e.clientX - r.left - pan.x) / zoom;
+      const my = (e.clientY - r.top  - pan.y) / zoom;
+      setPendingEdge(pe => pe ? { ...pe, mouse: { x: mx, y: my } } : null);
     }
-    function onUp(ev) {
+    function onUp(e) {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
-      const rect = svgRef.current.getBoundingClientRect();
-      const mx = (ev.clientX - rect.left - pan.x) / zoom;
-      const my = (ev.clientY - rect.top  - pan.y) / zoom;
-      setNodes(cur => {
-        const target = cur.find(n => n.id !== fromId && mx >= n.x - 20 && mx <= n.x + NODE_W + 20 && my >= n.y - 10 && my <= n.y + NODE_H + 10);
-        if (target) {
-          setEdges(es => {
-            if (es.some(e => e.from === fromId && e.to === target.id)) return es;
-            return [...es, { id: `e${Date.now()}`, from: fromId, to: target.id, label: "" }];
-          });
+      const svg = svgRef.current; if (!svg) { setPendingEdge(null); return; }
+      const r = svg.getBoundingClientRect();
+      const mx = (e.clientX - r.left - pan.x) / zoom;
+      const my = (e.clientY - r.top  - pan.y) / zoom;
+      setNodes(ns => {
+        const target = ns.find(n => {
+          const ip = inPort(n);
+          return Math.hypot(ip.x - mx, ip.y - my) < 18;
+        });
+        if (target && target.id !== fromId) {
+          const newEdge = { id: "e" + Date.now(), from: fromId, to: target.id, label: "" };
+          setEdges(es => [...es, newEdge]);
         }
-        return cur;
+        return ns;
       });
       setPendingEdge(null);
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
-  }
+  }, [pan, zoom]);
 
-  function handleCanvasMouseDown(e) {
-    if (e.target !== svgRef.current && !e.target.hasAttribute("data-canvas")) return;
-    setSelectedNode(null);
-    setSelectedEdge(null);
-    setRightPanel(null);
-    panRef.current = { mx: e.clientX, my: e.clientY, px: pan.x, py: pan.y };
+  const handleCanvasMouseDown = useCallback((e) => {
+    if (e.button !== 0) return;
+    if (e.target.dataset.canvas !== "1" && e.target.tagName !== "svg") return;
+    setSelectedNode(null); setSelectedEdge(null); setRightPanel(null);
+    const start = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+    panRef.current = start;
     function onMove(ev) {
       if (!panRef.current) return;
-      setPan({ x: panRef.current.px + ev.clientX - panRef.current.mx, y: panRef.current.py + ev.clientY - panRef.current.my });
+      setPan({ x: start.px + ev.clientX - start.x, y: start.py + ev.clientY - start.y });
     }
-    function onUp() { panRef.current = null; document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); }
+    function onUp() {
+      panRef.current = null;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
-  }
+  }, [pan]);
 
-  // Right-click on canvas → context menu
-  function handleContextMenu(e) {
+  const handleWheel = useCallback((e) => {
     e.preventDefault();
-    // Only fire on the canvas background, not on nodes/edges
-    if (e.target !== svgRef.current && !e.target.hasAttribute("data-canvas")) return;
-    setCtxMenu({ x: e.clientX, y: e.clientY, canvasX: (e.clientX - (svgRef.current?.getBoundingClientRect().left || 0) - pan.x) / zoom, canvasY: (e.clientY - (svgRef.current?.getBoundingClientRect().top  || 0) - pan.y) / zoom });
-  }
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    setZoom(z => Math.min(2, Math.max(0.25, +(z + delta).toFixed(1))));
+  }, []);
 
-  function handleWheel(e) {
+  const handleContextMenu = useCallback((e) => {
     e.preventDefault();
-    setZoom(z => Math.max(0.25, Math.min(2, z * (1 - e.deltaY * 0.001))));
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  async function handleLogout() {
+    await fetch("http://127.0.0.1:8000/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
+    onLogout();
   }
 
-  const selNode = nodes.find(n => n.id === selectedNode);
-  const selEdge = edges.find(e => e.id === selectedEdge);
-  const panelWidth = rightPanel ? (rightPanel === "node" ? 300 : rightPanel === "add" ? 280 : 260) : 0;
+  const NAV_ITEMS = [
+    { icon: "◫",  tip: "Workflows", on: true  },
+    { icon: "▶",  tip: "Executions", on: false },
+    { icon: "🔑", tip: "Credentials", on: false },
+    { icon: "⚙",  tip: "Settings", on: false  },
+  ];
 
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "'Inter',-apple-system,sans-serif", overflow: "hidden", background: "#F8FAFC" }}>
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "#F8FAFC", fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
 
-      {/* Slim sidebar */}
-      <div style={{ width: 52, background: "#0F172A", display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 12, gap: 6, flexShrink: 0 }}>
-        <div style={{ width: 34, height: 34, background: "#FF6D5A", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, marginBottom: 8 }}>⚡</div>
-        {[{ icon: "◫", tip: "Editor", on: true }, { icon: "▶", tip: "Executions", on: false }, { icon: "🔑", tip: "Credentials", on: false }, { icon: "⚙", tip: "Settings", on: false }].map(item => (
+      {/* Sidebar */}
+      <div style={{ width: 52, background: "#1E293B", display: "flex", flexDirection: "column", alignItems: "center", padding: "12px 0", gap: 4, flexShrink: 0 }}>
+        <div style={{ width: 34, height: 34, borderRadius: 10, background: "#FF6D5A", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, marginBottom: 14, boxShadow: "0 2px 8px rgba(255,109,90,0.4)" }}>⚡</div>
+        {NAV_ITEMS.map(item => (
           <button key={item.tip} title={item.tip}
             style={{ width: 36, height: 36, border: "none", borderRadius: 8, cursor: "pointer", fontSize: 16, background: item.on ? "rgba(123,97,255,0.3)" : "transparent", color: item.on ? "#A78BFA" : "#475569", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {item.icon}
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#7B61FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "white", fontWeight: 700, marginBottom: 12 }}>JD</div>
+        {/* Avatar — click to logout */}
+        <div
+          title="Sign out"
+          onClick={handleLogout}
+          style={{ width: 30, height: 30, borderRadius: "50%", background: "#7B61FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "white", fontWeight: 700, marginBottom: 12, cursor: "pointer" }}
+        >
+          JD
+        </div>
       </div>
 
       {/* Main editor area */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-
-        {/* Toolbar */}
         <div style={{ height: 52, background: "white", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 8, padding: "0 16px", flexShrink: 0 }}>
           <input defaultValue="My Workflow"
             style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", border: "1px solid transparent", borderRadius: 6, padding: "5px 8px", background: "transparent", outline: "none", fontFamily: "inherit" }}
@@ -580,7 +531,6 @@ export default function App() {
             onBlur={e => e.target.style.borderColor = "transparent"} />
           <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 12, background: "#E6F9F2", color: "#36B37E", fontWeight: 700 }}>Saved</span>
           <div style={{ flex: 1 }} />
-
           <button onClick={() => setShowGrid(g => !g)}
             style={{ padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 6, background: showGrid ? "#EDE9FF" : "white", color: showGrid ? "#7B61FF" : "#94A3B8", cursor: "pointer", fontSize: 12 }}>Grid</button>
           <button onClick={() => setZoom(z => Math.min(2, +(z+0.1).toFixed(1)))}
@@ -591,13 +541,10 @@ export default function App() {
           <button onClick={() => { setZoom(1); setPan({ x: 60, y: 30 }); }}
             style={{ padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 6, background: "white", cursor: "pointer", fontSize: 12, color: "#64748B" }}>Reset</button>
           <div style={{ width: 1, height: 28, background: "#E2E8F0" }} />
-
           <button onClick={() => setRightPanel(rp => rp === "add" ? null : "add")}
             style={{ padding: "7px 14px", border: "1px solid #E2E8F0", borderRadius: 6, background: rightPanel === "add" ? "#EDE9FF" : "white", color: rightPanel === "add" ? "#7B61FF" : "#475569", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
             + Add Node
           </button>
-
-          {/* Global workflow active toggle */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#F8FAFC", padding: "5px 10px", borderRadius: 8, border: "1px solid #E2E8F0" }}>
             <span style={{ fontSize: 12, color: "#64748B" }}>Workflow</span>
             <div onClick={() => setIsActive(a => !a)}
@@ -605,14 +552,12 @@ export default function App() {
               <div style={{ position: "absolute", top: 3, left: isActive ? 20 : 3, width: 16, height: 16, borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
             </div>
           </div>
-
           <button onClick={() => { setRunning(true); setTimeout(() => setRunning(false), 2200); }} disabled={running}
             style={{ padding: "7px 18px", background: running ? "#94A3B8" : "#FF6D5A", color: "white", border: "none", borderRadius: 8, cursor: running ? "default" : "pointer", fontSize: 13, fontWeight: 700 }}>
             {running ? "⟳ Running…" : "▶ Execute"}
           </button>
         </div>
 
-        {/* Canvas + right panels */}
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
             <svg ref={svgRef} width="100%" height="100%"
@@ -628,7 +573,6 @@ export default function App() {
                 </defs>
               )}
               {showGrid && <rect data-canvas="1" width="100%" height="100%" fill="url(#grid)" />}
-
               <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
                 {edges.map(edge => (
                   <EdgePath key={edge.id} edge={edge} nodes={nodes} selected={selectedEdge === edge.id} onClick={handleEdgeClick} />
@@ -642,8 +586,6 @@ export default function App() {
                 ))}
               </g>
             </svg>
-
-            {/* Status bar */}
             <div style={{ position: "absolute", bottom: 14, left: 14, display: "flex", gap: 8, pointerEvents: "none" }}>
               <div style={{ background: "white", borderRadius: 8, padding: "5px 12px", border: "1px solid #E2E8F0", fontSize: 12, color: "#64748B" }}>
                 {nodes.length} nodes · {edges.length} connections · {nodes.filter(n => n.enabled).length} active
@@ -654,12 +596,9 @@ export default function App() {
                 </div>
               )}
             </div>
-
-            {/* Hint bar */}
             <div style={{ position: "absolute", bottom: 14, right: panelWidth + 14, background: "white", borderRadius: 8, padding: "5px 12px", border: "1px solid #E2E8F0", fontSize: 11, color: "#94A3B8", pointerEvents: "none", transition: "right 0.15s" }}>
               Drag <strong style={{ color: "#475569" }}>+</strong> port to connect · Right-click canvas to add · <kbd style={{ background: "#F1F5F9", padding: "1px 5px", borderRadius: 4, fontSize: 10 }}>Del</kbd> removes selected
             </div>
-
             {nodes.length === 0 && (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <div style={{ textAlign: "center", color: "#94A3B8" }}>
@@ -670,8 +609,6 @@ export default function App() {
               </div>
             )}
           </div>
-
-          {/* Right panel */}
           {rightPanel === "node" && selNode && (
             <NodePanel node={selNode} onClose={() => setRightPanel(null)} onUpdate={updateNode} onDelete={deleteNode} />
           )}
@@ -684,7 +621,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Context menu */}
       {ctxMenu && (
         <ContextMenu
           x={ctxMenu.x} y={ctxMenu.y}
