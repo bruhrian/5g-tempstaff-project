@@ -27,7 +27,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # update to your UI origin
+    allow_origins=["http://localhost:5173"],  # update to your UI origin
     allow_credentials=True,  # required for cookies to be sent cross-origin
     allow_methods=["*"],
     allow_headers=["*"],
