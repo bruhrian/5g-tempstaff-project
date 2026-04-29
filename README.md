@@ -1,5 +1,5 @@
 # 5g-tempstaff-project
-CCTV IoT x MCP project: No-code end-user agentic framework
+CCTV IoT x MCP system: No-code end-user agentic framework
 
 ## 🏗️ System Architecture
 
