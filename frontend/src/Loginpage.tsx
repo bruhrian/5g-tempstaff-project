@@ -2,8 +2,14 @@ import { useState } from "react";
 
 const API_BASE = "http://127.0.0.1:8000";
 
+interface UserData {
+  username: string;
+  email: string;
+  role_name: string;
+}
+
 interface LoginPageProps {
-  onLoginSuccess: () => void;
+  onLoginSuccess: (user: UserData) => void;
   onGoToRegister: () => void;
 }
 
@@ -28,7 +34,8 @@ export default function LoginPage({ onLoginSuccess, onGoToRegister }: LoginPageP
       });
 
       if (res.ok) {
-        onLoginSuccess();
+        const userData = await res.json();
+        onLoginSuccess(userData);
       } else {
         const data = await res.json();
         setError(data.detail || "Invalid email or password.");
