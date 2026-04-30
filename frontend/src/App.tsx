@@ -5,27 +5,41 @@ import RegisterPage from "./RegisterPage";
 // ─── Auth state ───────────────────────────────────────────────────────────────
 type Page = "login" | "register" | "app";
 
+type Profile = { username: string; email: string; role_name: string };
+
 function useAuth() {
   const [page, setPage] = useState<Page>("login");
   const [checking, setChecking] = useState(true);
+  const [profile, setProfile] = useState<Profile | null>(null);
 
-  // On first load, check if there's already a valid session
+  // On first load, check if there's already a valid session and load profile
   useEffect(() => {
     fetch("http://127.0.0.1:8000/users/me", { credentials: "include" })
       .then(res => {
-        if (res.ok) setPage("app");
-        else setPage("login");
+        if (res.ok) return res.json();
+        throw new Error("not authenticated");
+      })
+      .then(data => {
+        setProfile(data);
+        setPage("app");
       })
       .catch(() => setPage("login"))
       .finally(() => setChecking(false));
   }, []);
 
-  return { page, setPage, checking };
+  return { page, setPage, checking, profile, setProfile };
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 export default function App() {
-  const { page, setPage, checking } = useAuth();
+  const { page, setPage, checking, profile, setProfile } = useAuth();
+
+  // After login the backend already returns the user object in the response body.
+  // We receive it here directly — no second fetch needed, no cookie race condition.
+  function handleLoginSuccess(userData: Profile) {
+    setProfile(userData);
+    setPage("app");
+  }
 
   if (checking) {
     return (
@@ -42,7 +56,7 @@ export default function App() {
   if (page === "login") {
     return (
       <LoginPage
-        onLoginSuccess={() => setPage("app")}
+        onLoginSuccess={handleLoginSuccess}
         onGoToRegister={() => setPage("register")}
       />
     );
@@ -56,12 +70,14 @@ export default function App() {
     );
   }
 
-  return <WorkflowApp onLogout={() => setPage("login")} />;
+  return <WorkflowApp onLogout={() => { setProfile(null); setPage("login"); }} profile={profile} />;
 }
 
 // ─── The rest of your existing app, wrapped in WorkflowApp ───────────────────
 // Pass onLogout down so the sidebar avatar button can log the user out.
-function WorkflowApp({ onLogout }: { onLogout: () => void }) {
+function WorkflowApp({ onLogout, profile }: { 
+  onLogout: () => void; profile: { username: string; email: string; role_name: string } | null 
+}) {
 
   // ── All your existing state & logic below (unchanged) ────────────────────
 
@@ -352,9 +368,12 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
     return () => document.removeEventListener("mousedown", h);
   }, []);
   return (
-    <div style={{ position: "fixed", top: y, left: x, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", zIndex: 1000, minWidth: 160, overflow: "hidden" }}>
-      <button onClick={onAddNode}
-        style={{ width: "100%", padding: "9px 14px", background: "none", border: "none", cursor: "pointer", fontSize: 12, textAlign: "left", color: "#1E293B", display: "flex", alignItems: "center", gap: 8 }}
+    <div
+      style={{ position: "fixed", top: y, left: x, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", zIndex: 1000, minWidth: 160, overflow: "hidden" }}
+      onMouseDown={e => e.stopPropagation()} // prevent the global mousedown from closing the menu before click fires
+    >
+      <button onClick={() => { onAddNode(); onClose(); }}
+        style={{ width: "100%", padding: "9px 14px", background: "none", border: "none", cursor: "pointer", fontSize: 12, textAlign: "left", color: "#1E293B", display: "flex", alignItems: "center", gap: 8, fontFamily: "inherit" }}
         onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
         onMouseLeave={e => (e.currentTarget.style.background = "none")}>
         <span>＋</span> Add Node
@@ -364,8 +383,19 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
 }
 
   // ── State ─────────────────────────────────────────────────────────────────
-  const [nodes, setNodes]           = useState(INITIAL_NODES);
-  const [edges, setEdges]           = useState(INITIAL_EDGES);
+  // Keys are prefixed with the user's ID so each account has isolated storage
+  const uid = profile?.username ?? "guest";
+  const K = { nodes: `wf_nodes_${uid}`, edges: `wf_edges_${uid}`, name: `wf_name_${uid}` };
+
+  const [nodes, setNodes]           = useState(() => {
+    try { const s = localStorage.getItem(`wf_nodes_${uid}`); return s ? JSON.parse(s) : INITIAL_NODES; } catch { return INITIAL_NODES; }
+  });
+  const [edges, setEdges]           = useState(() => {
+    try { const s = localStorage.getItem(`wf_edges_${uid}`); return s ? JSON.parse(s) : INITIAL_EDGES; } catch { return INITIAL_EDGES; }
+  });
+  const [workflowName, setWorkflowName] = useState(() => {
+    try { return localStorage.getItem(`wf_name_${uid}`) || "My Workflow"; } catch { return "My Workflow"; }
+  });
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedEdge, setSelectedEdge] = useState(null);
   const [rightPanel, setRightPanel] = useState(null);
@@ -376,7 +406,42 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
   const [running, setRunning]       = useState(false);
   const [pendingEdge, setPendingEdge] = useState(null);
   const [ctxMenu, setCtxMenu]       = useState(null);
+  const [showProfile, setShowProfile] = useState(false);
+  // profile is passed in from App — no need to fetch again
   const svgRef                      = useRef(null);
+  const closeTimerRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // When the user changes (e.g. different account logs in), reload their saved state
+  useEffect(() => {
+    try {
+      const savedNodes = localStorage.getItem(K.nodes);
+      const savedEdges = localStorage.getItem(K.edges);
+      const savedName  = localStorage.getItem(K.name);
+      setNodes(savedNodes ? JSON.parse(savedNodes) : INITIAL_NODES);
+      setEdges(savedEdges ? JSON.parse(savedEdges) : INITIAL_EDGES);
+      setWorkflowName(savedName || "My Workflow");
+    } catch {}
+  }, [uid]);
+
+  // Persist nodes, edges and workflow name under this user's keys
+  useEffect(() => {
+    try { localStorage.setItem(K.nodes, JSON.stringify(nodes)); } catch {}
+  }, [nodes, K.nodes]);
+  useEffect(() => {
+    try { localStorage.setItem(K.edges, JSON.stringify(edges)); } catch {}
+  }, [edges, K.edges]);
+  useEffect(() => {
+    try { localStorage.setItem(K.name, workflowName); } catch {}
+  }, [workflowName, K.name]);
+
+  function handleProfileEnter() {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    setShowProfile(true);
+  }
+
+  function handleProfileLeave() {
+    closeTimerRef.current = setTimeout(() => setShowProfile(false), 200);
+  }
 
   const panRef  = useRef(null);
   const panelWidth = rightPanel ? 280 : 0;
@@ -492,6 +557,11 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
     onLogout();
   }
 
+  // Derive initials from profile username or fallback
+  const initials = profile?.username
+    ? profile.username.slice(0, 2).toUpperCase()
+    : "JD";
+
   const NAV_ITEMS = [
     { icon: "◫",  tip: "Workflows", on: true  },
     { icon: "▶",  tip: "Executions", on: false },
@@ -500,10 +570,21 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
   ];
 
   return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "#F8FAFC", fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+    // Fix fullscreen: use position fixed + inset 0 so it fills any viewport size
+    <div style={{
+      position: "fixed", inset: 0,
+      display: "flex", overflow: "hidden",
+      background: "#F8FAFC",
+      fontFamily: "'Segoe UI', system-ui, sans-serif",
+    }}>
 
       {/* Sidebar */}
-      <div style={{ width: 52, background: "#1E293B", display: "flex", flexDirection: "column", alignItems: "center", padding: "12px 0", gap: 4, flexShrink: 0 }}>
+      <div style={{
+        width: 52, background: "#1E293B",
+        display: "flex", flexDirection: "column", alignItems: "center",
+        padding: "12px 0", gap: 4, flexShrink: 0,
+        position: "relative", zIndex: 10,
+      }}>
         <div style={{ width: 34, height: 34, borderRadius: 10, background: "#FF6D5A", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, marginBottom: 14, boxShadow: "0 2px 8px rgba(255,109,90,0.4)" }}>⚡</div>
         {NAV_ITEMS.map(item => (
           <button key={item.tip} title={item.tip}
@@ -512,20 +593,111 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        {/* Avatar — click to logout */}
-        <div
-          title="Sign out"
-          onClick={handleLogout}
-          style={{ width: 30, height: 30, borderRadius: "50%", background: "#7B61FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "white", fontWeight: 700, marginBottom: 12, cursor: "pointer" }}
+
+        {/* Profile avatar with hover popover */}
+        <div style={{ position: "relative", marginBottom: 12 }}
+          onMouseEnter={handleProfileEnter}
+          onMouseLeave={handleProfileLeave}
         >
-          JD
+          {/* Avatar button */}
+          <div style={{
+            width: 30, height: 30, borderRadius: "50%",
+            background: "#7B61FF",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 11, color: "white", fontWeight: 700,
+            cursor: "pointer",
+            border: showProfile ? "2px solid #A78BFA" : "2px solid transparent",
+            transition: "border-color 0.15s",
+          }}>
+            {initials}
+          </div>
+
+          {/* Profile popover — appears on hover, pops to the right */}
+          {showProfile && (
+            <>
+            {/* Invisible bridge fills the gap so mouseLeave doesn't fire mid-move */}
+            <div style={{
+              position: "absolute",
+              bottom: 0,
+              left: "100%",
+              width: 14,
+              height: "100%",
+              minHeight: 180,
+            }} />
+            <div style={{
+              position: "absolute",
+              bottom: 0,
+              left: "calc(100% + 12px)",
+              width: 220,
+              background: "#1E293B",
+              border: "1px solid #334155",
+              borderRadius: 12,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+              overflow: "hidden",
+              zIndex: 100,
+            }}>
+              {/* Profile header */}
+              <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid #334155" }}>
+                {/* Avatar large */}
+                <div style={{
+                  width: 44, height: 44, borderRadius: "50%",
+                  background: "linear-gradient(135deg, #7B61FF, #A78BFA)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 16, color: "white", fontWeight: 700,
+                  marginBottom: 10,
+                  boxShadow: "0 2px 8px rgba(123,97,255,0.4)",
+                }}>
+                  {initials}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#F1F5F9", marginBottom: 2 }}>
+                  {profile?.username || "—"}
+                </div>
+                <div style={{ fontSize: 11, color: "#64748B", wordBreak: "break-all" }}>
+                  {profile?.email || "—"}
+                </div>
+                {profile?.role_name && (
+                  <div style={{
+                    display: "inline-block", marginTop: 8,
+                    fontSize: 10, fontWeight: 700,
+                    padding: "2px 8px", borderRadius: 10,
+                    background: "rgba(123,97,255,0.2)", color: "#A78BFA",
+                    textTransform: "uppercase", letterSpacing: "0.5px",
+                  }}>
+                    {profile.role_name}
+                  </div>
+                )}
+              </div>
+
+              {/* Logout button */}
+              <button
+                onClick={handleLogout}
+                style={{
+                  width: "100%", padding: "11px 16px",
+                  background: "none", border: "none",
+                  cursor: "pointer", textAlign: "left",
+                  fontSize: 12, fontWeight: 600,
+                  color: "#F87171",
+                  display: "flex", alignItems: "center", gap: 8,
+                  fontFamily: "inherit",
+                  transition: "background 0.15s",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = "rgba(239,68,68,0.1)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "none")}
+              >
+                <span style={{ fontSize: 14 }}>→</span> Sign Out
+              </button>
+            </div>
+            </>
+          )}
         </div>
       </div>
 
       {/* Main editor area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
         <div style={{ height: 52, background: "white", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 8, padding: "0 16px", flexShrink: 0 }}>
-          <input defaultValue="My Workflow"
+          <input
+            value={workflowName}
+            onChange={e => setWorkflowName(e.target.value)}
             style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", border: "1px solid transparent", borderRadius: 6, padding: "5px 8px", background: "transparent", outline: "none", fontFamily: "inherit" }}
             onFocus={e => e.target.style.borderColor = "#7B61FF"}
             onBlur={e => e.target.style.borderColor = "transparent"} />
@@ -534,10 +706,10 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
           <button onClick={() => setShowGrid(g => !g)}
             style={{ padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 6, background: showGrid ? "#EDE9FF" : "white", color: showGrid ? "#7B61FF" : "#94A3B8", cursor: "pointer", fontSize: 12 }}>Grid</button>
           <button onClick={() => setZoom(z => Math.min(2, +(z+0.1).toFixed(1)))}
-            style={{ padding: "6px 11px", border: "1px solid #E2E8F0", borderRadius: 6, background: "white", cursor: "pointer", fontSize: 14 }}>+</button>
+            style={{ padding: "6px 11px", border: "1px solid #E2E8F0", borderRadius: 6, background: "white", cursor: "pointer", fontSize: 16, fontFamily: "monospace", lineHeight: 1, color: "#1E293B" }}>+</button>
           <span style={{ fontSize: 12, color: "#64748B", minWidth: 38, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
           <button onClick={() => setZoom(z => Math.max(0.25, +(z-0.1).toFixed(1)))}
-            style={{ padding: "6px 11px", border: "1px solid #E2E8F0", borderRadius: 6, background: "white", cursor: "pointer", fontSize: 14 }}>−</button>
+            style={{ padding: "6px 11px", border: "1px solid #E2E8F0", borderRadius: 6, background: "white", cursor: "pointer", fontSize: 16, fontFamily: "monospace", lineHeight: 1, color: "#1E293B" }}>−</button>
           <button onClick={() => { setZoom(1); setPan({ x: 60, y: 30 }); }}
             style={{ padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 6, background: "white", cursor: "pointer", fontSize: 12, color: "#64748B" }}>Reset</button>
           <div style={{ width: 1, height: 28, background: "#E2E8F0" }} />
@@ -624,7 +796,7 @@ function ContextMenu({ x, y, onAddNode, onClose }) {
       {ctxMenu && (
         <ContextMenu
           x={ctxMenu.x} y={ctxMenu.y}
-          onAddNode={() => { setRightPanel("add"); }}
+          onAddNode={() => setRightPanel("add")}
           onClose={() => setCtxMenu(null)}
         />
       )}
