@@ -1,7 +1,6 @@
 import telebot
-from telebot import apihelper
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 import os
+import asyncio
 import logging
 from dotenv import load_dotenv
 from backend.agents import orchestrator_response
@@ -30,14 +29,6 @@ def send_welcome(message):
     """
     bot.reply_to(message, welcome_text)
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callback(call):
-    """Handle button clicks"""
-    if call.data == "btn1":
-        bot.answer_callback_query(call.id, "You clicked Button 1!")
-    elif call.data == "btn2":
-        bot.answer_callback_query(call.id, "You clicked Button 2!")
-
 @bot.message_handler(func=lambda message: True)
 def reply_all(message):
     try:
@@ -49,7 +40,7 @@ def reply_all(message):
             user_name = message.from_user.first_name
             
             if query:
-                response = orchestrator_response(query)
+                response = asyncio.run(orchestrator_response(query))
                 
                 # Extract just the text to send
                 result = response.get("result")
