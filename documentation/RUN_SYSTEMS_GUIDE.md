@@ -1,4 +1,4 @@
-### HOW TO TURN ON THE SYSTEMS:
+### HOW TO RUN THE SYSTEMS:
 
 ``` bash
 Run Application(frontend + backend)
@@ -13,3 +13,6 @@ Run mcp-server(separate from app)
 cd backend
 python mcp-server.py
 ```
+### Things to check before running
+* Postgres Database running
+* Neo4j Instance + Database running
