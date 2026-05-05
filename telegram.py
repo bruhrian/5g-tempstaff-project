@@ -10,8 +10,8 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Get values from environment variables
-BOT_TOKEN = os.getenv('BOT_TOKEN')
+# Get telegram bot token from environment variables
+BOT_TOKEN = os.getenv('BOT_TOKEN') 
 
 # Validate that environment variables are loaded
 if not BOT_TOKEN:
@@ -19,6 +19,7 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# '/start' prints out welcome message
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     welcome_text = """
@@ -29,6 +30,8 @@ def send_welcome(message):
     """
     bot.reply_to(message, welcome_text)
 
+# passes any message that has '@AI'(non-case sensitive) at the front,
+# to the orchestrator to respond
 @bot.message_handler(func=lambda message: True)
 def reply_all(message):
     try:
