@@ -9,12 +9,13 @@ from sqlalchemy.orm import selectinload
 from session_app.config import settings
 from session_app.models.models import Session, SessionEvent, SessionStatus, User
 
-
+# Returns the current UTC time as a timezone-aware datetime.
 def _utcnow() -> datetime:
     """Always returns timezone-aware UTC datetime."""
     return datetime.now(timezone.utc)
 
-
+# Looks up a session status ID by name (e.g. "active", "expired", "revoked").
+# Raises a RuntimeError if the status name is not found in the database.
 async def _get_status_id(db: AsyncSession, name: str) -> int:
     result = await db.execute(
         select(SessionStatus.status_id).where(SessionStatus.status_name == name)
@@ -24,7 +25,8 @@ async def _get_status_id(db: AsyncSession, name: str) -> int:
         raise RuntimeError(f"Session status '{name}' not found in DB")
     return status_id
 
-
+# Appends a SessionEvent audit record to the current DB session.
+# Captures the event type, IP address, user agent, and any optional metadata.
 async def _log_event(
     db: AsyncSession,
     session_id: uuid.UUID,
@@ -43,7 +45,7 @@ async def _log_event(
     )
     db.add(event)
 
-
+# Ensures a datetime is timezone-aware, assuming UTC if no timezone info is present.
 def _make_aware(dt: datetime) -> datetime:
     """Ensure a datetime is timezone-aware (assume UTC if naive)."""
     if dt.tzinfo is None:
@@ -54,6 +56,8 @@ def _make_aware(dt: datetime) -> datetime:
 # ------------------------------------------------------------------
 # Create session
 # ------------------------------------------------------------------
+# Creates a new active session for the given user, storing their IP and user agent.
+# Flushes the session to the DB and logs a login event before returning it.
 async def create_session(
     db: AsyncSession,
     user: User,
@@ -80,6 +84,8 @@ async def create_session(
 # ------------------------------------------------------------------
 # Validate session (used on every protected request)
 # ------------------------------------------------------------------
+# Validates a session by ID, checking it is active and not expired.
+# Slides the expiry window on success, or marks it expired and returns None on failure.
 async def validate_session(
     db: AsyncSession,
     session_id: uuid.UUID,
@@ -125,6 +131,8 @@ async def validate_session(
 # ------------------------------------------------------------------
 # Revoke a single session (logout)
 # ------------------------------------------------------------------
+# Marks a single session as revoked and logs a logout event.
+# Returns False if the session does not exist, True on success.
 async def revoke_session(
     db: AsyncSession,
     session_id: uuid.UUID,
@@ -150,6 +158,8 @@ async def revoke_session(
 # ------------------------------------------------------------------
 # Revoke all sessions for a user (e.g. password change, forced logout)
 # ------------------------------------------------------------------
+# Revokes all active sessions for a user, optionally excluding one session by ID.
+# Logs a forced_revoke event for each and returns the total count revoked.
 async def revoke_all_sessions(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -183,6 +193,7 @@ async def revoke_all_sessions(
 # ------------------------------------------------------------------
 # List active sessions for a user
 # ------------------------------------------------------------------
+# Returns all non-expired active sessions for a user, ordered by most recently seen.
 async def get_active_sessions(
     db: AsyncSession,
     user_id: uuid.UUID,
