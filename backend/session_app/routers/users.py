@@ -12,6 +12,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 # ------------------------------------------------------------------
 # GET /users/me  — return the currently authenticated user's profile
 # ------------------------------------------------------------------
+# Returns the profile of the currently authenticated user.
 @router.get("/me", response_model=UserResponse)
 async def get_me(
     request: Request,
