@@ -16,6 +16,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from session_app.db.database import Base
 
 
+# Returns the current UTC time as a timezone-aware datetime.
+# Used as a default factory for timestamp columns across all models.
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -27,6 +29,8 @@ TZ = TIMESTAMP(timezone=True)
 # ------------------------------------------------------------------
 # Role
 # ------------------------------------------------------------------
+# Lookup table for user roles (e.g. admin, user).
+# Linked to users via a one-to-many relationship.
 class Role(Base):
     __tablename__ = "roles"
 
@@ -40,6 +44,8 @@ class Role(Base):
 # ------------------------------------------------------------------
 # User
 # ------------------------------------------------------------------
+# Represents a registered user with a UUID primary key, hashed password, and role assignment.
+# Tracks creation and update timestamps, and links to the user's active sessions.
 class User(Base):
     __tablename__ = "users"
 
@@ -65,6 +71,8 @@ class User(Base):
 # ------------------------------------------------------------------
 # SessionStatus
 # ------------------------------------------------------------------
+# Lookup table for session states (e.g. active, expired, revoked).
+# Linked to sessions via a one-to-many relationship.
 class SessionStatus(Base):
     __tablename__ = "session_status"
 
@@ -78,6 +86,8 @@ class SessionStatus(Base):
 # ------------------------------------------------------------------
 # Session
 # ------------------------------------------------------------------
+# Represents an authenticated user session, storing IP, user agent, and expiry.
+# Cascades deletes from the parent user and links to its audit events.
 class Session(Base):
     __tablename__ = "sessions"
 
@@ -104,6 +114,8 @@ class Session(Base):
 # ------------------------------------------------------------------
 # SessionEvent
 # ------------------------------------------------------------------
+# Audit log of events that occurred within a session (e.g. login, logout, token refresh).
+# Stores IP, user agent, and arbitrary metadata as JSONB. Cascades deletes from the parent session.
 class SessionEvent(Base):
     __tablename__ = "session_events"
 
