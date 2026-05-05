@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import os, re
 
 load_dotenv()
-SQL_prompt = os.getenv('db_manager_prompt')
+SQL_prompt = os.getenv('db_manager_prompt') # prompt for agent
 
 PG_HOST            = os.getenv("PG_HOST")
 PG_PORT            = os.getenv("PG_PORT")
@@ -19,6 +19,7 @@ OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL")
 
+# restrictions for agent
 _PROHIBITED_PATTERNS = re.compile(
     r"""
     \b(
@@ -45,17 +46,25 @@ _PROHIBITED_PATTERNS = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# what write commands are allowed for the agent
 _WRITE_PATTERNS = re.compile(
     r"^\s*(INSERT|UPDATE|DELETE|UPSERT)\b",
     re.IGNORECASE,
 )
 
+# Returns True if the SQL statement contains any prohibited DDL operations (e.g. DROP, CREATE, ALTER).
+# Used as a safety check before executing any SQL to prevent destructive schema-level changes.
 def _is_prohibited(sql: str) -> bool:
     return bool(_PROHIBITED_PATTERNS.search(sql))
 
+# Returns True if the SQL statement is a write operation (INSERT, UPDATE, DELETE, UPSERT).
+# Used to route queries to the write execution path instead of the read query engine.
 def _is_write_operation(sql: str) -> bool:
     return bool(_WRITE_PATTERNS.match(sql.strip()))
 
+# Attaches a SQLAlchemy event listener to the engine that intercepts every SQL statement
+# before execution. Raises a PermissionError if a prohibited DDL statement is detected,
+# acting as a last-line-of-defence guard regardless of how the query was triggered.
 def _attach_guard(engine: Engine) -> None:
     @event.listens_for(engine, "before_cursor_execute")
     def _guard(conn, cursor, statement, parameters, context, executemany):
@@ -68,6 +77,9 @@ def _attach_guard(engine: Engine) -> None:
 _engine: Engine | None = None
 _query_engine: NLSQLTableQueryEngine | None = None
 
+# Returns a singleton SQLAlchemy engine connected to the configured PostgreSQL database.
+# On first call, creates the engine, attaches the SQL guard, and inspects available tables.
+# Subsequent calls return the cached engine instance.
 def _get_engine() -> Engine:
     global _engine
     if _engine is None:
@@ -79,9 +91,12 @@ def _get_engine() -> Engine:
         _attach_guard(_engine)
         inspector = inspect(_engine)
         available_tables = inspector.get_table_names(schema="public")
-        print(f"✅ Tables available to agent: {available_tables}")
+        #print(f"✅ Tables available to agent: {available_tables}")
     return _engine
 
+# Returns a singleton NLSQLTableQueryEngine configured with the available PostgreSQL tables
+# and the locally hosted Ollama LLM and embedding models. On first call, initialises the
+# SQL database wrapper, LLM, and embedding model, then caches the engine for reuse.
 def _get_query_engine() -> NLSQLTableQueryEngine:
     global _query_engine
     if _query_engine is None:
@@ -118,6 +133,9 @@ def _get_query_engine() -> NLSQLTableQueryEngine:
         )
     return _query_engine
 
+# Executes a validated write SQL statement (INSERT, UPDATE, DELETE) directly against
+# the database. Runs a prohibition check before execution and returns a summary of
+# how many rows were affected. Raises PermissionError if a prohibited pattern is found.
 def _execute_write(sql: str) -> str:
     if _is_prohibited(sql):
         raise PermissionError(f"Prohibited SQL blocked:\n{sql}")
@@ -134,11 +152,16 @@ def _execute_write(sql: str) -> str:
         )
     return f"✅ Success — {rowcount} row(s) affected."
 
+# Reads the SQL agent prompt template from disk and injects the user's natural language
+# query into the {query} placeholder, returning the fully assembled prompt string.
 def _load_prompt(query: str) -> str:
     with open(SQL_prompt, "r", encoding="utf-8") as f:
         template = f.read()
     return template.replace("{query}", query)
 
+# Handles natural language write requests by prompting the LLM to generate a write SQL
+# statement, stripping any Markdown formatting from the output, validating that it is
+# a permitted write operation, and then executing it via _execute_write.
 async def _nl_write_query(query: str) -> str:
     qe = _get_query_engine()
 
@@ -150,7 +173,7 @@ async def _nl_write_query(query: str) -> str:
 
     generated_sql = re.sub(r"^```(?:sql)?|```$", "", generated_sql, flags=re.MULTILINE).strip()
 
-    print(f"🔧 Generated write SQL: {generated_sql}")
+    # print(f"🔧 Generated write SQL: {generated_sql}")
 
     if not _is_write_operation(generated_sql):
         return (
@@ -160,6 +183,10 @@ async def _nl_write_query(query: str) -> str:
 
     return _execute_write(generated_sql)
 
+# Main entry point for the SQL agent. Accepts a natural language query, detects whether
+# the intent is a write or read operation, and routes accordingly — write queries go
+# through _nl_write_query, while read queries are handled by the NLSQLTableQueryEngine.
+# Returns a plain-text response string, or an error message if something goes wrong.
 async def sql_agent_query(query: str) -> str:
     try:
         write_intent = re.search(
