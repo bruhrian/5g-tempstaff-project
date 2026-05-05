@@ -3,6 +3,7 @@ from datetime import datetime
 import time
 from tzlocal import get_localzone
 
+# gets date, time & timezone, all into a json format
 async def get_current_datetime_json():
     now = datetime.now()
     local_tz = get_localzone()
