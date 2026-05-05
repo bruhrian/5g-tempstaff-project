@@ -7,8 +7,10 @@ from session_app.config import settings
 from session_app.db.database import engine
 from session_app.models.models import Base
 from session_app.routers import auth, sessions, users
+import uvicorn
 
-
+# Manages application startup and shutdown — creates all DB tables on startup
+# and disposes of the engine connection pool on shutdown.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create all tables on startup (use Alembic migrations in production)
@@ -37,7 +39,7 @@ app.include_router(auth.router)
 app.include_router(sessions.router)
 app.include_router(users.router)
 
-
+# Health check endpoint that confirms the API is running and returns the current environment.
 @app.get("/health", tags=["health"])
 async def health_check() -> dict:
     return {"status": "ok", "environment": settings.environment}
