@@ -12,6 +12,7 @@ from session_app.utils.session_service import create_session, revoke_session
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Shared cookie options applied to all session cookies set or deleted by this router.
 _COOKIE_OPTS = {
     "key": settings.session_cookie_name,
     "httponly": True,
@@ -23,6 +24,8 @@ _COOKIE_OPTS = {
 # ------------------------------------------------------------------
 # POST /auth/register
 # ------------------------------------------------------------------
+# Registers a new user with the default member role after checking for duplicate email or username.
+# Returns the created user's public details as a UserResponse.
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)) -> UserResponse:
     # Check for duplicates
@@ -73,6 +76,8 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)) ->
 # ------------------------------------------------------------------
 # POST /auth/login
 # ------------------------------------------------------------------
+# Authenticates a user by email and password, creates a session, and sets the session cookie.
+# Raises 401 for invalid credentials or 403 if the account is disabled.
 @router.post("/login", response_model=UserResponse)
 async def login(
     body: LoginRequest,
@@ -120,6 +125,8 @@ async def login(
 # ------------------------------------------------------------------
 # POST /auth/logout
 # ------------------------------------------------------------------
+# Revokes the current session if a valid session cookie is present, then clears the cookie.
+# Silently succeeds even if the session is already invalid or missing.
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
     request: Request,
