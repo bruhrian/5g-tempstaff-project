@@ -20,6 +20,8 @@ AsyncSessionLocal = async_sessionmaker(
 class Base(DeclarativeBase):
     pass
 
+# FastAPI dependency that yields an async DB session per request.
+# Automatically commits on success, rolls back on error, and always closes the session.
 async def get_db() -> AsyncSession:
     """FastAPI dependency — yields a DB session per request."""
     async with AsyncSessionLocal() as session:
