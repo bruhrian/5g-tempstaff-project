@@ -13,22 +13,24 @@ import tiktoken
 import numpy as np
 
 load_dotenv()
-HF_TOKEN = os.getenv('HF_TOKEN')
+HF_TOKEN = os.getenv('HF_TOKEN') # for initial downloading of models
 
 enc = tiktoken.get_encoding("cl100k_base")
 
-WORKING_DIR = r"D:\brian\5g lab\lightrag"
+WORKING_DIR = r"D:\brian\5g lab\lightrag" # can be replaced with less hardcoded directory
 setup_logger("lightrag", level="INFO")
 os.makedirs(WORKING_DIR, exist_ok=True)
 
 # Storage Mode (for querying, e.g., "hybrid")
-MODE = "hybrid" 
+MODE = "hybrid"  
 COMPLETION_MODEL = "gemma4:e4b"
 EMBEDDING_MODEL = "mxbai-embed-large"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 
-FOLDER_PATH = r"D:\brian\Manuals"
-
+# this is whr, u pass the directory of the folder of the pdf documents 
+# that you want to be indexed 
+# can be replaced with less hardcoded directory
+FOLDER_PATH = r"D:\brian\Manuals" 
 
 os.environ["POSTGRES_HOST"] = os.getenv('PG_HOST')  
 os.environ["POSTGRES_PORT"] = os.getenv('PG_PORT')
@@ -44,11 +46,13 @@ os.environ["NEO4J_DATABASE"] = os.getenv('NEO4J_DB')
 
 reranker = CrossEncoder(RERANK_MODEL, device="cuda")
 
+# reranking function
 def rerank_func(query: str, documents: list[str]) -> list[float]:
     pairs = [(query, doc) for doc in documents]
     scores = reranker.predict(pairs)
     return scores.tolist()
 
+# converts texts to embeddings and output in np array format
 async def safe_embed(texts: list[str]) -> list[list[float]]:
     MAX_CHARS = 1500
     client = ollama_client_lib.AsyncClient()
@@ -60,6 +64,7 @@ async def safe_embed(texts: list[str]) -> list[list[float]]:
         results.append(response.embeddings[0])
     return np.array(results)
 
+# initialise the Lightrag
 rag = LightRAG(
     working_dir=WORKING_DIR,
     llm_model_func=ollama_model_complete,
@@ -72,18 +77,21 @@ rag = LightRAG(
     ),
     rerank_model_func=rerank_func,
 
+    # Storage declaration
     kv_storage="PGKVStorage",
     vector_storage="PGVectorStorage",
     doc_status_storage="PGDocStatusStorage",
     graph_storage="Neo4JStorage", 
 )
 
+# convert doc page to base64
 def page_to_base64(page) -> str:
     img = page.to_image(resolution=150).original
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode()
 
+# use completion model to summarise page
 def summarize_page(image_b64: str) -> str:
     response = ollama.chat(
         model=COMPLETION_MODEL,  
@@ -95,11 +103,14 @@ def summarize_page(image_b64: str) -> str:
     )
     return response["message"]["content"]
 
+# shorten max characters
 def truncate_to_tokens(text: str, max_tokens: int = 200) -> str:
     """Rough truncation: ~4 chars per token as a safe approximation."""
     max_chars = max_tokens * 4
     return text[:max_chars] if len(text) > max_chars else text
 
+# workflow function for image processing, summarise page & summarise and tokenise
+# for single pdf
 def process_pdf(file_path: str) -> str:
     all_text = []
     with pdfplumber.open(file_path) as pdf:
@@ -111,6 +122,8 @@ def process_pdf(file_path: str) -> str:
             all_text.append(f"[Page {i}]\n{summary}")
     return "\n\n".join(all_text)
 
+# workflow function for image processing, summarise page & summarise and tokenise
+# for whole folder
 async def process_folder(folder_path: str):
     pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.pdf')]
     if not pdf_files:
@@ -156,6 +169,9 @@ async def clear_failed_documents():
 
     await conn.close()
 
+# place this function in other script if needed
+# to process the documents
+# for more info, check out the documentation folder in git
 async def main():
     folder_path = FOLDER_PATH
 
