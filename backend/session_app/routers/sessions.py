@@ -19,6 +19,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 # ------------------------------------------------------------------
 # GET /sessions  — list all active sessions for current user
 # ------------------------------------------------------------------
+# Returns all active, non-expired sessions for the authenticated user.
 @router.get("/", response_model=ActiveSessionsResponse)
 async def list_sessions(
     request: Request,
@@ -49,6 +50,8 @@ async def list_sessions(
 # ------------------------------------------------------------------
 # DELETE /sessions/{session_id}  — revoke a specific session
 # ------------------------------------------------------------------
+# Revokes a specific session by ID after verifying it belongs to the authenticated user.
+# Clears the session cookie if the user is revoking their own current session.
 @router.delete("/{session_id}", response_model=MessageResponse)
 async def revoke_one_session(
     session_id: uuid.UUID,
@@ -91,6 +94,8 @@ async def revoke_one_session(
 # ------------------------------------------------------------------
 # DELETE /sessions  — revoke ALL other sessions (keep current)
 # ------------------------------------------------------------------
+# Revokes all active sessions for the authenticated user except their current one.
+# Returns a count of how many sessions were revoked.
 @router.delete("/", response_model=MessageResponse)
 async def revoke_all_other_sessions(
     request: Request,
