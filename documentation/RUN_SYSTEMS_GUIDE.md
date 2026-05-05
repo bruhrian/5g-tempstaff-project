@@ -1,4 +1,4 @@
-### Installation
+### HOW TO TURN ON THE SYSTEMS:
 
 ``` bash
 Run Application(frontend + backend)
