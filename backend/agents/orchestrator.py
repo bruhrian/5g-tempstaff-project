@@ -10,6 +10,7 @@ import os, time, psycopg2
 
 load_dotenv()
 
+# global variables
 ORCHESTRATOR_PROMPT_PATH = os.getenv('orc_prompt')
 MODEL = "gemma4:e4b"
 MCP_SERVER_IP = os.getenv('mcp_server_ip')
@@ -21,6 +22,8 @@ if not DB_CONN:
 else:
     print(f"✅ Postgres connection string loaded.")
 
+# Verifies that a live connection to the PostgreSQL database can be established.
+# Returns True on success or False on failure, printing the outcome either way.
 def init_postgres_db(conn_string: str = DB_CONN) -> bool:
     try:
         conn = psycopg2.connect(conn_string)
@@ -31,26 +34,32 @@ def init_postgres_db(conn_string: str = DB_CONN) -> bool:
         print(f"❌ Failed to connect to Postgres: {e}")
         return False
 
+# Retrieves the SQLChatMessageHistory instance for a given session ID.
+# Used to load prior conversation turns and persist new ones across requests.
 def get_session_history(session_id: str, conn_string: str = DB_CONN) -> SQLChatMessageHistory:
     return SQLChatMessageHistory(
         session_id=session_id,
         connection_string=conn_string
     )
 
+# Loads and previews the chat history for a given session ID for debugging purposes.
+# Silently returns if there are no prior messages (expected behaviour for new sessions).
 def log_session_history(session_id: str, conn_string: str = DB_CONN) -> None:
     history = get_session_history(session_id, conn_string)
     messages: list[BaseMessage] = history.messages
-    print(f"\n🔍 Chat history for session [{session_id}]:")
+    # print(f"\n🔍 Chat history for session [{session_id}]:")
     if not messages:
-        print("   ⚠️  No prior messages (normal for a new session)")
+        # print("   ⚠️  No prior messages (normal for a new session)")
         return
-    print(f"   {len(messages)} message(s) loaded:")
+    # print(f"   {len(messages)} message(s) loaded:")
     for i, msg in enumerate(messages):
         preview = str(msg.content)[:120]
         if len(str(msg.content)) > 120:
             preview += "..."
-        print(f"   [{i}] {type(msg).__name__}: {preview}")
+        # print(f"   [{i}] {type(msg).__name__}: {preview}")
 
+# Main entry point for the orchestrator agent — verifies the DB, loads the LLM and MCP tools,
+# then invokes the ReAct agent with full conversation history and persists the result.
 async def orchestrator_response(
     query: str,
     session_id: str | None = None,
@@ -66,7 +75,7 @@ async def orchestrator_response(
 
     if not session_id:
         session_id = DEFAULT_SESSION_ID
-        print(f"ℹ️  No session_id provided — using default: [{session_id}]")
+        # print(f"ℹ️  No session_id provided — using default: [{session_id}]")
     else:
         print(f"🔄 Resuming session: [{session_id}]")
 
@@ -91,7 +100,7 @@ async def orchestrator_response(
             history = get_session_history(session_id, conn_string)
             messages_in = history.messages + [HumanMessage(content=query)]
 
-            print(f"📨 Sending {len(messages_in)} message(s) to agent "f"({len(history.messages)} from history + 1 new)")
+            # print(f"📨 Sending {len(messages_in)} message(s) to agent "f"({len(history.messages)} from history + 1 new)")
 
             try:
                 start_time = time.time()
@@ -102,9 +111,9 @@ async def orchestrator_response(
 
                 history.add_user_message(query)
                 history.add_ai_message(output)
-                print(f"💾 Turn saved to DB (session: {session_id})")
+                # print(f"💾 Turn saved to DB (session: {session_id})")
 
-                print(f"\n💬 Response : {output}")
+                # print(f"\n💬 Response : {output}")
                 print(f"⏱️  Elapsed  : {elapsed:.2f}s")
                 print(f"🗂️  Session  : {session_id}")
 
