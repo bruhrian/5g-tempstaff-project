@@ -13,7 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import INET, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from session_app.db.database import Base
+from session_app.db.database import Base, FrontendBase
 
 
 # Returns the current UTC time as a timezone-aware datetime.
@@ -132,3 +132,27 @@ class SessionEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(TZ, default=utcnow, server_default=func.now())
 
     session: Mapped["Session"] = relationship("Session", back_populates="events")
+
+
+# ------------------------------------------------------------------
+# NodeType  (frontend database)
+# ------------------------------------------------------------------
+# Stores the catalog of available workflow node types (triggers, actions, etc.).
+# Uses FrontendBase so SQLAlchemy maps it to the frontend database engine,
+# keeping it fully isolated from the main session/user tables.
+# is_active allows soft-disabling a node without deleting its record.
+# sort_order controls display order in the Add Node panel.
+class NodeType(FrontendBase):
+    __tablename__ = "node_types"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    type: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    icon: Mapped[str] = mapped_column(String(10), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(TZ, default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TZ, default=utcnow, server_default=func.now(), onupdate=utcnow
+    )
