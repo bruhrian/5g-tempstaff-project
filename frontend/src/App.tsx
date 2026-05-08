@@ -19,12 +19,18 @@ type NodeCatalogItem = {
   sort_order: number;
 };
 
+// Node IDs that are valid AI model providers — only these can connect to the
+// bottom "model port" of agent / orchestrator nodes.
+const MODEL_PROVIDER_IDS = new Set(["openai", "ollama"]);
+
+// Node IDs that expose a bottom model port
+const AGENT_NODE_IDS = new Set(["agent", "orchestrator"]);
+
 function useAuth() {
   const [page, setPage] = useState<Page>("login");
   const [checking, setChecking] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
 
-  // On first load, check if there's already a valid session and load profile
   useEffect(() => {
     fetch(`${API_BASE}/users/me`, { credentials: "include" })
       .then(res => {
@@ -94,7 +100,12 @@ function WorkflowApp({ onLogout, profile }: {
     condition: { color: "#F5A623", bg: "#FFF8EC", label: "Condition" },
     transform: { color: "#36B37E", bg: "#E6F9F2", label: "Transform" },
     output:    { color: "#0052CC", bg: "#E6EEFF", label: "Output" },
+    // Agent is a frontend-only display category — stored as 'action' in DB
+    agent:     { color: "#9333EA", bg: "#F5F0FF", label: "Agent" },
   };
+
+  // Color used for model-port connections
+  const MODEL_EDGE_COLOR = "#F59E0B";
 
   const INITIAL_NODES = [
     { id: "n1", nodeId: "webhook", x: 80,  y: 200, name: "Webhook",      desc: "Listens for incoming HTTP requests and starts the workflow.", status: "idle", enabled: true  },
@@ -105,14 +116,16 @@ function WorkflowApp({ onLogout, profile }: {
   ];
 
   const INITIAL_EDGES = [
-    { id: "e1", from: "n1", to: "n2", label: "" },
-    { id: "e2", from: "n2", to: "n3", label: "" },
-    { id: "e3", from: "n3", to: "n4", label: "true" },
-    { id: "e4", from: "n3", to: "n5", label: "false" },
+    { id: "e1", from: "n1", to: "n2", label: "", edgeType: "data" },
+    { id: "e2", from: "n2", to: "n3", label: "", edgeType: "data" },
+    { id: "e3", from: "n3", to: "n4", label: "true",  edgeType: "data" },
+    { id: "e4", from: "n3", to: "n5", label: "false", edgeType: "data" },
   ];
 
   const NODE_W = 180;
   const NODE_H = 76;
+  // Extra height added to agent/orchestrator nodes to make room for model port
+  const AGENT_EXTRA_H = 24;
   const PORT_R = 9;
 
   // ── Node catalog — fetched from the database ──────────────────────────────
@@ -133,9 +146,6 @@ function WorkflowApp({ onLogout, profile }: {
       .finally(() => setCatalogLoading(false));
   }, []);
 
-  // Returns the catalog entry for a given nodeId, falling back to a safe
-  // placeholder so nodes already on the canvas render even if the catalog
-  // hasn't loaded yet or the id is no longer in the DB.
   function getCat(nodeId: string): NodeCatalogItem {
     return (
       nodeCatalog.find(c => c.id === nodeId) || {
@@ -149,59 +159,117 @@ function WorkflowApp({ onLogout, profile }: {
     );
   }
 
-  function outPort(node) { return { x: node.x + NODE_W, y: node.y + NODE_H / 2 }; }
-  function inPort(node)  { return { x: node.x,          y: node.y + NODE_H / 2 }; }
-  function bezier(s, e)  {
+  // ── Port helpers ──────────────────────────────────────────────────────────
+  // Returns the effective height of a node (agent nodes are taller)
+  function nodeHeight(node) {
+    return AGENT_NODE_IDS.has(node.nodeId) ? NODE_H + AGENT_EXTRA_H : NODE_H;
+  }
+
+  function outPort(node) {
+    return { x: node.x + NODE_W, y: node.y + NODE_H / 2 };
+  }
+  function inPort(node) {
+    return { x: node.x, y: node.y + NODE_H / 2 };
+  }
+  // Bottom-centre port — only exists on agent / orchestrator nodes
+  function modelPort(node) {
+    return { x: node.x + NODE_W / 2, y: node.y + nodeHeight(node) };
+  }
+
+  function bezier(s, e) {
     const cx = (s.x + e.x) / 2;
     return `M${s.x},${s.y} C${cx},${s.y} ${cx},${e.y} ${e.x},${e.y}`;
   }
 
+  // Bezier that drops straight down from model port, then curves to the target
+  function modelBezier(s, e) {
+    const cy1 = s.y + Math.abs(e.y - s.y) * 0.5;
+    const cy2 = e.y - Math.abs(e.y - s.y) * 0.25;
+    return `M${s.x},${s.y} C${s.x},${cy1} ${e.x},${cy2} ${e.x},${e.y}`;
+  }
+
+  // ── EdgePath ──────────────────────────────────────────────────────────────
   function EdgePath({ edge, nodes, selected, onClick }) {
     const from = nodes.find(n => n.id === edge.from);
     const to   = nodes.find(n => n.id === edge.to);
     if (!from || !to) return null;
-    const s  = outPort(from);
-    const e  = inPort(to);
-    const d  = bezier(s, e);
+
+    const isModelEdge = edge.edgeType === "model";
+
+    // Model edges originate from the bottom port of the agent node
+    const s = isModelEdge ? modelPort(from) : outPort(from);
+    // Model edges land on the right-side out port of the model node (visually
+    // the "output" of the model feeds up into the agent)
+    const e = isModelEdge ? outPort(to) : inPort(to);
+
+    const d = isModelEdge ? modelBezier(s, e) : bezier(s, e);
     const mx = (s.x + e.x) / 2;
     const my = (s.y + e.y) / 2;
     const disabled = !from.enabled || !to.enabled;
+
+    const strokeColor = isModelEdge
+      ? (selected ? "#D97706" : MODEL_EDGE_COLOR)
+      : (selected ? "#7B61FF" : disabled ? "#E2E8F0" : "#CBD5E1");
+
     return (
       <g style={{ cursor: "pointer" }} onClick={ev => { ev.stopPropagation(); onClick(edge.id); }}>
         <path d={d} fill="none" stroke="transparent" strokeWidth={16} />
         <path d={d} fill="none"
-          stroke={selected ? "#7B61FF" : disabled ? "#E2E8F0" : "#CBD5E1"}
-          strokeWidth={selected ? 2.5 : 1.5}
-          strokeDasharray={disabled ? "6 3" : "none"}
+          stroke={strokeColor}
+          strokeWidth={selected ? 2.5 : isModelEdge ? 2 : 1.5}
+          strokeDasharray={isModelEdge ? "5 3" : disabled ? "6 3" : "none"}
           opacity={disabled ? 0.5 : 1}
         />
+        {/* Arrowhead */}
         <path d={`M${e.x-8},${e.y-5} L${e.x},${e.y} L${e.x-8},${e.y+5}`}
-          fill="none" stroke={selected ? "#7B61FF" : disabled ? "#CBD5E1" : "#94A3B8"} strokeWidth={1.5} />
-        {edge.label && (
+          fill="none"
+          stroke={isModelEdge ? MODEL_EDGE_COLOR : selected ? "#7B61FF" : disabled ? "#CBD5E1" : "#94A3B8"}
+          strokeWidth={1.5} />
+
+        {/* Label pill */}
+        {(edge.label || isModelEdge) && (
           <>
-            <rect x={mx-22} y={my-11} width={44} height={20} rx={10} fill={selected ? "#EDE9FF" : "#F1F5F9"} />
-            <text x={mx} y={my+5} textAnchor="middle" fontSize={10} fill={selected ? "#7B61FF" : "#64748B"} fontFamily="monospace">{edge.label}</text>
+            <rect x={mx - (isModelEdge ? 28 : 22)} y={my - 11}
+              width={isModelEdge ? 56 : 44} height={20} rx={10}
+              fill={isModelEdge ? "#FEF3C7" : selected ? "#EDE9FF" : "#F1F5F9"} />
+            <text x={mx} y={my + 5} textAnchor="middle" fontSize={10}
+              fill={isModelEdge ? "#D97706" : selected ? "#7B61FF" : "#64748B"}
+              fontFamily="monospace">
+              {isModelEdge ? "⬡ model" : edge.label}
+            </text>
           </>
         )}
+
+        {/* Delete button on selected */}
         {selected && (
-          <g transform={`translate(${mx+26},${my-11})`}
+          <g transform={`translate(${mx + (isModelEdge ? 36 : 26)},${my - 11})`}
             onClick={ev => { ev.stopPropagation(); onClick("__del__" + edge.id); }}
             style={{ cursor: "pointer" }}>
             <circle r={9} fill="#EF4444" />
-            <text x={0} y={4} textAnchor="middle" fontSize={11} fill="white" fontWeight={700} style={{ pointerEvents: "none" }}>✕</text>
+            <text x={0} y={4} textAnchor="middle" fontSize={11} fill="white" fontWeight={700}
+              style={{ pointerEvents: "none" }}>✕</text>
           </g>
         )}
       </g>
     );
   }
 
-  function WorkflowNode({ node, selected, onSelect, onDrag, onStartEdge }) {
-    const cat  = getCat(node.nodeId);
-    const type = NODE_TYPES[cat.type] ?? NODE_TYPES.action;
-    const dragRef = useRef(null);
-    const didDrag = useRef(false);
-    const STATUS_COLOR = { active: "#36B37E", success: "#0052CC", error: "#E53E3E", idle: "#94A3B8" };
+  // ── WorkflowNode ──────────────────────────────────────────────────────────
+  function WorkflowNode({ node, selected, onSelect, onDrag, onStartEdge, onStartModelEdge, hasModelEdgeIn }) {
+    const cat      = getCat(node.nodeId);
+    // Agent/orchestrator nodes get the purple 'agent' style; fall back to their
+    // DB type otherwise so all other nodes still resolve correctly.
+    const displayType = AGENT_NODE_IDS.has(node.nodeId) ? "agent" : cat.type;
+    const type     = NODE_TYPES[displayType] ?? NODE_TYPES.action;
+    const isAgent  = AGENT_NODE_IDS.has(node.nodeId);
+    const isTrigger = cat.type === "trigger";
+    const isModelProvider = MODEL_PROVIDER_IDS.has(node.nodeId);
+    const h        = nodeHeight(node);
+    const dragRef  = useRef(null);
+    const didDrag  = useRef(false);
     const isDisabled = !node.enabled;
+
+    const STATUS_COLOR = { active: "#36B37E", success: "#0052CC", error: "#E53E3E", idle: "#94A3B8" };
 
     function handleBodyMouseDown(e) {
       e.stopPropagation();
@@ -222,45 +290,127 @@ function WorkflowApp({ onLogout, profile }: {
       document.addEventListener("mouseup", onUp);
     }
 
-    function handlePortMouseDown(e) {
+    function handleOutPortMouseDown(e) {
       e.stopPropagation();
       onStartEdge(node.id, outPort(node));
     }
 
+    function handleModelPortMouseDown(e) {
+      e.stopPropagation();
+      onStartModelEdge(node.id, modelPort(node));
+    }
+
+    const mp = modelPort(node);
+
     return (
       <g opacity={isDisabled ? 0.55 : 1}>
-        <rect x={node.x} y={node.y} width={NODE_W} height={NODE_H} rx={10}
+        {/* Main card body — taller for agent nodes */}
+        <rect x={node.x} y={node.y} width={NODE_W} height={h} rx={10}
           fill="white"
           stroke={selected ? "#7B61FF" : "#E2E8F0"}
           strokeWidth={selected ? 2 : 1}
-          style={{ filter: selected ? "drop-shadow(0 0 8px rgba(123,97,255,0.25))" : "drop-shadow(0 1px 3px rgba(0,0,0,0.08))", cursor: "grab" }}
+          style={{
+            filter: selected
+              ? "drop-shadow(0 0 8px rgba(123,97,255,0.25))"
+              : "drop-shadow(0 1px 3px rgba(0,0,0,0.08))",
+            cursor: "grab",
+          }}
           onMouseDown={handleBodyMouseDown}
         />
-        <rect x={node.x} y={node.y} width={4} height={NODE_H} rx={2} fill={type.color} style={{ pointerEvents: "none" }} />
-        <circle cx={node.x} cy={node.y + NODE_H / 2} r={PORT_R}
-          fill="white" stroke={type.color} strokeWidth={2}
-          style={{ cursor: "default", pointerEvents: "none" }}
-        />
-        <rect x={node.x + 14} y={node.y + 10} width={28} height={28} rx={7} fill={type.bg} style={{ pointerEvents: "none" }} />
-        <text x={node.x + 28} y={node.y + 29} textAnchor="middle" fontSize={14} style={{ pointerEvents: "none" }}>{cat.icon}</text>
-        <text x={node.x + 52} y={node.y + 24} fontSize={12} fontWeight={700} fill={isDisabled ? "#94A3B8" : "#1E293B"} fontFamily="inherit" style={{ pointerEvents: "none" }}>{node.name}</text>
-        <text x={node.x + 52} y={node.y + 38} fontSize={10} fill="#94A3B8" fontFamily="inherit" style={{ pointerEvents: "none" }}>
-          {cat.type.charAt(0).toUpperCase() + cat.type.slice(1)}
+
+        {/* Left colour accent bar */}
+        <rect x={node.x} y={node.y} width={4} height={h} rx={2}
+          fill={type.color} style={{ pointerEvents: "none" }} />
+
+        {/* Left (input) port:
+            - Hidden entirely on trigger nodes (they only emit)
+            - When a model-provider (openai/ollama) is connected to an agent via
+              a model edge, replace the normal port with a dashed amber circle
+              so it's visually locked — data connections are blocked in this state */}
+        {!isTrigger && !(isModelProvider && hasModelEdgeIn) && (
+          <circle cx={node.x} cy={node.y + NODE_H / 2} r={PORT_R}
+            fill="white"
+            stroke={type.color}
+            strokeWidth={2}
+            style={{ cursor: "default", pointerEvents: "none" }}
+          />
+        )}
+        {isModelProvider && hasModelEdgeIn && (
+          <circle cx={node.x} cy={node.y + NODE_H / 2} r={PORT_R}
+            fill="#FEF3C7"
+            stroke={MODEL_EDGE_COLOR}
+            strokeWidth={2}
+            strokeDasharray="3 2"
+            style={{ cursor: "not-allowed", pointerEvents: "none" }}
+          />
+        )}
+
+        {/* Icon box */}
+        <rect x={node.x + 14} y={node.y + 10} width={28} height={28} rx={7}
+          fill={type.bg} style={{ pointerEvents: "none" }} />
+        <text x={node.x + 28} y={node.y + 29} textAnchor="middle" fontSize={14}
+          style={{ pointerEvents: "none" }}>{cat.icon}</text>
+
+        {/* Name & type label */}
+        <text x={node.x + 52} y={node.y + 24} fontSize={12} fontWeight={700}
+          fill={isDisabled ? "#94A3B8" : "#1E293B"} fontFamily="inherit"
+          style={{ pointerEvents: "none" }}>{node.name}</text>
+        <text x={node.x + 52} y={node.y + 38} fontSize={10} fill="#94A3B8"
+          fontFamily="inherit" style={{ pointerEvents: "none" }}>
+          {(NODE_TYPES[displayType]?.label ?? displayType.charAt(0).toUpperCase() + displayType.slice(1))}
           {isDisabled ? " · DISABLED" : ""}
         </text>
-        <circle cx={node.x + NODE_W - 14} cy={node.y + 14} r={4} fill={STATUS_COLOR[node.status] || "#94A3B8"} style={{ pointerEvents: "none" }} />
+
+        {/* Status dot */}
+        <circle cx={node.x + NODE_W - 14} cy={node.y + 14} r={4}
+          fill={STATUS_COLOR[node.status] || "#94A3B8"}
+          style={{ pointerEvents: "none" }} />
+
+        {/* Right (output) port */}
         <circle cx={node.x + NODE_W} cy={node.y + NODE_H / 2} r={PORT_R}
           fill="white" stroke={type.color} strokeWidth={2}
           style={{ cursor: "crosshair" }}
-          onMouseDown={handlePortMouseDown}
+          onMouseDown={handleOutPortMouseDown}
         />
+
+        {/* ── Model port — only for agent / orchestrator ── */}
+        {isAgent && (
+          <>
+            {/* Divider line separating main body from model port area */}
+            <line
+              x1={node.x + 12} y1={node.y + NODE_H}
+              x2={node.x + NODE_W - 12} y2={node.y + NODE_H}
+              stroke="#E2E8F0" strokeWidth={1}
+              style={{ pointerEvents: "none" }}
+            />
+            {/* "Connect model" label */}
+            <text
+              x={node.x + NODE_W / 2} y={node.y + NODE_H + 15}
+              textAnchor="middle" fontSize={9} fill={MODEL_EDGE_COLOR}
+              fontFamily="inherit" fontWeight={600} letterSpacing={0.4}
+              style={{ pointerEvents: "none" }}>
+              ⬡ MODEL
+            </text>
+            {/* Bottom port circle */}
+            <circle cx={mp.x} cy={mp.y} r={PORT_R}
+              fill="white" stroke={MODEL_EDGE_COLOR} strokeWidth={2}
+              style={{ cursor: "crosshair" }}
+              onMouseDown={handleModelPortMouseDown}
+            />
+          </>
+        )}
       </g>
     );
   }
 
-  function NodePanel({ node, onClose, onUpdate, onDelete }) {
-    const cat = getCat(node.nodeId);
-    const type = NODE_TYPES[cat.type] ?? NODE_TYPES.action;
+  // ── NodePanel ─────────────────────────────────────────────────────────────
+  function NodePanel({ node, onClose, onUpdate, onDelete, connectedModelId }) {
+    const cat  = getCat(node.nodeId);
+    const displayType = AGENT_NODE_IDS.has(node.nodeId) ? "agent" : cat.type;
+    const type = NODE_TYPES[displayType] ?? NODE_TYPES.action;
+    const isAgent = AGENT_NODE_IDS.has(node.nodeId);
+    const modelCat = connectedModelId ? getCat(connectedModelId) : null;
+
     return (
       <div style={{ width: 280, background: "white", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
         <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 10 }}>
@@ -271,6 +421,7 @@ function WorkflowApp({ onLogout, profile }: {
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#94A3B8" }}>✕</button>
         </div>
+
         <div style={{ padding: 16, flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 600, color: "#94A3B8", marginBottom: 6 }}>DESCRIPTION</div>
@@ -291,7 +442,28 @@ function WorkflowApp({ onLogout, profile }: {
               <div style={{ position: "absolute", top: 2, left: node.enabled ? 18 : 2, width: 16, height: 16, borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
             </div>
           </div>
+
+          {/* Model connection status — shown only for agent/orchestrator */}
+          {isAgent && (
+            <div style={{ background: modelCat ? "#FFFBEB" : "#F8FAFC", border: `1px solid ${modelCat ? "#FDE68A" : "#E2E8F0"}`, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 6, letterSpacing: "0.5px" }}>⬡ CONNECTED MODEL</div>
+              {modelCat ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 18 }}>{modelCat.icon}</div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#1E293B" }}>{modelCat.name}</div>
+                    <div style={{ fontSize: 10, color: "#D97706", fontWeight: 600 }}>Active</div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#94A3B8" }}>
+                  No model connected. Drag from the <span style={{ color: MODEL_EDGE_COLOR, fontWeight: 600 }}>⬡ MODEL</span> port at the bottom to an <strong>OpenAI</strong> or <strong>Ollama</strong> node.
+                </div>
+              )}
+            </div>
+          )}
         </div>
+
         <div style={{ padding: "12px 16px", borderTop: "1px solid #E2E8F0" }}>
           <button onClick={() => onDelete(node.id)}
             style={{ width: "100%", padding: "8px", background: "#FFF0EE", color: "#EF4444", border: "1px solid #FECACA", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
@@ -302,23 +474,33 @@ function WorkflowApp({ onLogout, profile }: {
     );
   }
 
+  // ── EdgePanel ─────────────────────────────────────────────────────────────
   function EdgePanel({ edge, onClose, onUpdate, onDelete }) {
+    const isModelEdge = edge.edgeType === "model";
     return (
       <div style={{ width: 280, background: "white", borderLeft: "1px solid #E2E8F0", display: "flex", flexDirection: "column", flexShrink: 0 }}>
         <div style={{ padding: "14px 16px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#1E293B" }}>Connection</div>
+          <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#1E293B" }}>
+            {isModelEdge ? "⬡ Model Connection" : "Connection"}
+          </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#94A3B8" }}>✕</button>
         </div>
         <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "#94A3B8", marginBottom: 6 }}>LABEL</div>
-            <input defaultValue={edge.label}
-              onBlur={e => onUpdate(edge.id, { label: e.target.value })}
-              placeholder="true / false / …"
-              style={{ width: "100%", padding: "7px 10px", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
-              onFocus={e => e.target.style.borderColor = "#7B61FF"}
-            />
-          </div>
+          {isModelEdge ? (
+            <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.6, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 12px" }}>
+              This is a <strong>model connection</strong>. It links an agent node to its AI model provider (OpenAI or Ollama). Labels are not applicable.
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#94A3B8", marginBottom: 6 }}>LABEL</div>
+              <input defaultValue={edge.label}
+                onBlur={e => onUpdate(edge.id, { label: e.target.value })}
+                placeholder="true / false / …"
+                style={{ width: "100%", padding: "7px 10px", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+                onFocus={e => e.target.style.borderColor = "#7B61FF"}
+              />
+            </div>
+          )}
         </div>
         <div style={{ padding: "12px 16px", borderTop: "1px solid #E2E8F0", marginTop: "auto" }}>
           <button onClick={() => onDelete(edge.id)}
@@ -330,15 +512,28 @@ function WorkflowApp({ onLogout, profile }: {
     );
   }
 
+  // ── AddNodePanel ──────────────────────────────────────────────────────────
   function AddNodePanel({ onAdd, onClose }) {
     const [filter, setFilter] = useState("");
 
     const filtered = nodeCatalog.filter(n =>
       n.name.toLowerCase().includes(filter.toLowerCase()) ||
-      n.type.toLowerCase().includes(filter.toLowerCase())
+      n.type.toLowerCase().includes(filter.toLowerCase()) ||
+      // allow searching "agent" to surface agent/orchestrator nodes
+      (filter.toLowerCase() === "agent" && AGENT_NODE_IDS.has(n.id))
     );
-    const grouped = ["trigger", "action", "condition", "transform", "output"].map(t => ({
-      type: t, items: filtered.filter(n => n.type === t)
+
+    // For display purposes, agent/orchestrator nodes are lifted into their own
+    // "agent" group even though they are stored as type "action" in the DB.
+    function getDisplayType(item: NodeCatalogItem): string {
+      return AGENT_NODE_IDS.has(item.id) ? "agent" : item.type;
+    }
+
+    const CATEGORY_ORDER = ["trigger", "action", "agent", "condition", "transform", "output"];
+
+    const grouped = CATEGORY_ORDER.map(t => ({
+      type: t,
+      items: filtered.filter(n => getDisplayType(n) === t),
     })).filter(g => g.items.length > 0);
 
     return (
@@ -356,21 +551,16 @@ function WorkflowApp({ onLogout, profile }: {
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
-
-          {/* Loading state */}
           {catalogLoading && (
             <div style={{ padding: "32px 16px", textAlign: "center", color: "#94A3B8", fontSize: 12 }}>
               Loading nodes…
             </div>
           )}
 
-          {/* Error state with retry */}
           {!catalogLoading && catalogError && (
             <div style={{ padding: "24px 16px", textAlign: "center" }}>
               <div style={{ fontSize: 22, marginBottom: 8 }}>⚠️</div>
-              <div style={{ fontSize: 12, color: "#EF4444", marginBottom: 12 }}>
-                Could not load node types.
-              </div>
+              <div style={{ fontSize: 12, color: "#EF4444", marginBottom: 12 }}>Could not load node types.</div>
               <button
                 onClick={() => {
                   setCatalogError(false);
@@ -381,14 +571,12 @@ function WorkflowApp({ onLogout, profile }: {
                     .catch(() => setCatalogError(true))
                     .finally(() => setCatalogLoading(false));
                 }}
-                style={{ padding: "6px 14px", background: "#EDE9FF", color: "#7B61FF", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}
-              >
+                style={{ padding: "6px 14px", background: "#EDE9FF", color: "#7B61FF", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
                 Retry
               </button>
             </div>
           )}
 
-          {/* Loaded — grouped list */}
           {!catalogLoading && !catalogError && grouped.map(group => (
             <div key={group.type}>
               <div style={{ padding: "6px 16px 4px", fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.8px" }}>
@@ -399,19 +587,24 @@ function WorkflowApp({ onLogout, profile }: {
                   style={{ width: "100%", padding: "8px 16px", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, textAlign: "left" }}
                   onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
                   onMouseLeave={e => (e.currentTarget.style.background = "none")}>
-                  <div style={{ width: 28, height: 28, borderRadius: 6, background: NODE_TYPES[item.type]?.bg ?? "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 6, background: NODE_TYPES[getDisplayType(item)]?.bg ?? "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>
                     {item.icon}
                   </div>
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "#1E293B" }}>{item.name}</div>
                     <div style={{ fontSize: 11, color: "#94A3B8" }}>{item.description}</div>
                   </div>
+                  {/* Badge hint for agent nodes */}
+                  {AGENT_NODE_IDS.has(item.id) && (
+                    <div style={{ marginLeft: "auto", fontSize: 9, padding: "2px 6px", borderRadius: 8, background: "#FFFBEB", color: MODEL_EDGE_COLOR, border: "1px solid #FDE68A", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
+                      ⬡ model port
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
           ))}
 
-          {/* Empty search result */}
           {!catalogLoading && !catalogError && grouped.length === 0 && filter && (
             <div style={{ padding: "32px 16px", textAlign: "center", color: "#94A3B8", fontSize: 12 }}>
               No nodes match "{filter}"
@@ -422,6 +615,7 @@ function WorkflowApp({ onLogout, profile }: {
     );
   }
 
+  // ── ContextMenu ───────────────────────────────────────────────────────────
   function ContextMenu({ x, y, onAddNode, onClose }) {
     useEffect(() => {
       const h = () => onClose();
@@ -429,10 +623,8 @@ function WorkflowApp({ onLogout, profile }: {
       return () => document.removeEventListener("mousedown", h);
     }, []);
     return (
-      <div
-        style={{ position: "fixed", top: y, left: x, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", zIndex: 1000, minWidth: 160, overflow: "hidden" }}
-        onMouseDown={e => e.stopPropagation()}
-      >
+      <div style={{ position: "fixed", top: y, left: x, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", zIndex: 1000, minWidth: 160, overflow: "hidden" }}
+        onMouseDown={e => e.stopPropagation()}>
         <button onClick={() => { onAddNode(); onClose(); }}
           style={{ width: "100%", padding: "9px 14px", background: "none", border: "none", cursor: "pointer", fontSize: 12, textAlign: "left", color: "#1E293B", display: "flex", alignItems: "center", gap: 8, fontFamily: "inherit" }}
           onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
@@ -441,6 +633,16 @@ function WorkflowApp({ onLogout, profile }: {
         </button>
       </div>
     );
+  }
+
+  // ── Toast notification ────────────────────────────────────────────────────
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function showToast(msg: string) {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3000);
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -464,7 +666,7 @@ function WorkflowApp({ onLogout, profile }: {
   const [showGrid, setShowGrid]         = useState(true);
   const [isActive, setIsActive]         = useState(true);
   const [running, setRunning]           = useState(false);
-  const [pendingEdge, setPendingEdge]   = useState(null);
+  const [pendingEdge, setPendingEdge]   = useState<{ fromId: string; from: {x:number;y:number}; mouse: {x:number;y:number}; isModel: boolean } | null>(null);
   const [ctxMenu, setCtxMenu]           = useState(null);
   const [showProfile, setShowProfile]   = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
@@ -474,7 +676,6 @@ function WorkflowApp({ onLogout, profile }: {
   const avatarRef     = useRef<HTMLDivElement>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
 
-  // When the user changes, reload their saved state
   useEffect(() => {
     try {
       const savedNodes = localStorage.getItem(K.nodes);
@@ -486,18 +687,11 @@ function WorkflowApp({ onLogout, profile }: {
     } catch {}
   }, [uid]);
 
-  // Persist nodes, edges and workflow name
-  useEffect(() => {
-    try { localStorage.setItem(K.nodes, JSON.stringify(nodes)); } catch {}
-  }, [nodes, K.nodes]);
-  useEffect(() => {
-    try { localStorage.setItem(K.edges, JSON.stringify(edges)); } catch {}
-  }, [edges, K.edges]);
-  useEffect(() => {
-    try { localStorage.setItem(K.name, workflowName); } catch {}
-  }, [workflowName, K.name]);
+  useEffect(() => { try { localStorage.setItem(K.nodes, JSON.stringify(nodes)); } catch {} }, [nodes, K.nodes]);
+  useEffect(() => { try { localStorage.setItem(K.edges, JSON.stringify(edges)); } catch {} }, [edges, K.edges]);
+  useEffect(() => { try { localStorage.setItem(K.name, workflowName); } catch {} }, [workflowName, K.name]);
 
-  // Keyboard delete handler
+  // Keyboard delete
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement).tagName;
@@ -506,12 +700,10 @@ function WorkflowApp({ onLogout, profile }: {
         if (selectedNode) {
           setNodes(ns => ns.filter(n => n.id !== selectedNode));
           setEdges(es => es.filter(e => e.from !== selectedNode && e.to !== selectedNode));
-          setSelectedNode(null);
-          setRightPanel(null);
+          setSelectedNode(null); setRightPanel(null);
         } else if (selectedEdge) {
           setEdges(es => es.filter(e => e.id !== selectedEdge));
-          setSelectedEdge(null);
-          setRightPanel(null);
+          setSelectedEdge(null); setRightPanel(null);
         }
       }
     }
@@ -527,7 +719,6 @@ function WorkflowApp({ onLogout, profile }: {
     }
     setShowProfile(true);
   }
-
   function handleProfileLeave() {
     closeTimerRef.current = setTimeout(() => setShowProfile(false), 200);
   }
@@ -537,6 +728,14 @@ function WorkflowApp({ onLogout, profile }: {
 
   const selNode = nodes.find(n => n.id === selectedNode);
   const selEdge = edges.find(e => e.id === selectedEdge);
+
+  // For NodePanel: find the model node connected to an agent via model edge
+  const connectedModelNodeId = selNode
+    ? (edges.find(e => e.from === selNode.id && e.edgeType === "model")?.to ?? null)
+    : null;
+  const connectedModelNodeIdSource = connectedModelNodeId
+    ? getCat(nodes.find(n => n.id === connectedModelNodeId)?.nodeId ?? "")?.id
+    : null;
 
   function handleNodeSelect(id) { setSelectedNode(id); setSelectedEdge(null); setRightPanel("node"); }
   function handleNodeDrag(id, x, y) { setNodes(ns => ns.map(n => n.id === id ? { ...n, x, y } : n)); }
@@ -561,7 +760,6 @@ function WorkflowApp({ onLogout, profile }: {
     setSelectedEdge(null); setRightPanel(null);
   }
 
-  // Uses the fetched catalog — desc maps to the DB "description" field
   function addNode(nodeId: string) {
     const cat = nodeCatalog.find(c => c.id === nodeId);
     if (!cat) return;
@@ -576,8 +774,9 @@ function WorkflowApp({ onLogout, profile }: {
     setRightPanel(null);
   }
 
+  // ── Start a regular data edge from the right output port ──────────────────
   const handleStartEdge = useCallback((fromId, fromPt) => {
-    setPendingEdge({ fromId, from: fromPt, mouse: fromPt });
+    setPendingEdge({ fromId, from: fromPt, mouse: fromPt, isModel: false });
     function onMove(e) {
       const svg = svgRef.current; if (!svg) return;
       const r = svg.getBoundingClientRect();
@@ -598,8 +797,18 @@ function WorkflowApp({ onLogout, profile }: {
           return Math.hypot(ip.x - mx, ip.y - my) < 18;
         });
         if (target && target.id !== fromId) {
-          const newEdge = { id: "e" + Date.now(), from: fromId, to: target.id, label: "" };
-          setEdges(es => [...es, newEdge]);
+          // Block data connections into a model-provider node that is already
+          // wired to an agent via a model edge — its left port is reserved.
+          setEdges(es => {
+            const isModelConnected =
+              MODEL_PROVIDER_IDS.has(target.nodeId) &&
+              es.some(edge => edge.edgeType === "model" && edge.to === target.id);
+            if (isModelConnected) {
+              showToast("This node is reserved as a model provider — disconnect it from the agent first.");
+              return es;
+            }
+            return [...es, { id: "e" + Date.now(), from: fromId, to: target.id, label: "", edgeType: "data" }];
+          });
         }
         return ns;
       });
@@ -608,6 +817,60 @@ function WorkflowApp({ onLogout, profile }: {
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }, [pan, zoom]);
+
+  // ── Start a model edge from the bottom model port ─────────────────────────
+  const handleStartModelEdge = useCallback((fromId, fromPt) => {
+    setPendingEdge({ fromId, from: fromPt, mouse: fromPt, isModel: true });
+    function onMove(e) {
+      const svg = svgRef.current; if (!svg) return;
+      const r = svg.getBoundingClientRect();
+      const mx = (e.clientX - r.left - pan.x) / zoom;
+      const my = (e.clientY - r.top  - pan.y) / zoom;
+      setPendingEdge(pe => pe ? { ...pe, mouse: { x: mx, y: my } } : null);
+    }
+    function onUp(e) {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      const svg = svgRef.current; if (!svg) { setPendingEdge(null); return; }
+      const r = svg.getBoundingClientRect();
+      const mx = (e.clientX - r.left - pan.x) / zoom;
+      const my = (e.clientY - r.top  - pan.y) / zoom;
+      setNodes(ns => {
+        // Snap to any port of a valid model-provider node
+        const target = ns.find(n => {
+          const op = outPort(n);
+          const ip = inPort(n);
+          return (
+            MODEL_PROVIDER_IDS.has(n.nodeId) &&
+            (Math.hypot(op.x - mx, op.y - my) < 22 || Math.hypot(ip.x - mx, ip.y - my) < 22)
+          );
+        });
+        if (target) {
+          // Only allow one model connection per agent node
+          const alreadyConnected = edges.find(e => e.from === fromId && e.edgeType === "model");
+          if (alreadyConnected) {
+            showToast("This agent already has a model connected. Remove it first.");
+          } else {
+            setEdges(es => [...es, { id: "e" + Date.now(), from: fromId, to: target.id, label: "", edgeType: "model" }]);
+          }
+        } else {
+          // Dropped on non-model node — tell the user why it didn't connect
+          const anyNode = ns.find(n => {
+            const ip = inPort(n);
+            const op = outPort(n);
+            return Math.hypot(ip.x - mx, ip.y - my) < 22 || Math.hypot(op.x - mx, op.y - my) < 22;
+          });
+          if (anyNode) {
+            showToast("The model port can only connect to an OpenAI or Ollama node.");
+          }
+        }
+        return ns;
+      });
+      setPendingEdge(null);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [pan, zoom, edges]);
 
   const handleCanvasMouseDown = useCallback((e) => {
     if (e.button !== 0) return;
@@ -655,6 +918,10 @@ function WorkflowApp({ onLogout, profile }: {
 
   const sidebarWidth = sidebarExpanded ? 200 : 52;
 
+  // Pending edge stroke colour adapts to edge type
+  const pendingStroke = pendingEdge?.isModel ? MODEL_EDGE_COLOR : "#7B61FF";
+  const pendingDash   = pendingEdge?.isModel ? "5 3" : "7 4";
+
   return (
     <div style={{
       position: "fixed", inset: 0,
@@ -683,7 +950,6 @@ function WorkflowApp({ onLogout, profile }: {
             width: 34, height: 34, borderRadius: 10, background: "#FF6D5A",
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: 18, flexShrink: 0, boxShadow: "0 2px 8px rgba(255,109,90,0.4)",
-            transition: "transform 0.15s",
           }}>⚡</div>
           {sidebarExpanded && (
             <span style={{ fontSize: 13, fontWeight: 700, color: "#F1F5F9", whiteSpace: "nowrap", letterSpacing: "-0.3px" }}>
@@ -712,7 +978,6 @@ function WorkflowApp({ onLogout, profile }: {
 
         <div style={{ flex: 1 }} />
 
-        {/* Profile avatar */}
         <div ref={avatarRef} style={{
           position: "relative", marginBottom: 12, width: "100%",
           display: "flex", alignItems: "center",
@@ -746,6 +1011,7 @@ function WorkflowApp({ onLogout, profile }: {
 
       {/* ── Main editor area ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+        {/* Toolbar */}
         <div style={{ height: 52, background: "white", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: 8, padding: "0 16px", flexShrink: 0 }}>
           <input value={workflowName} onChange={e => setWorkflowName(e.target.value)}
             style={{ fontSize: 14, fontWeight: 700, color: "#1E293B", border: "1px solid transparent", borderRadius: 6, padding: "5px 8px", background: "transparent", outline: "none", fontFamily: "inherit" }}
@@ -799,13 +1065,29 @@ function WorkflowApp({ onLogout, profile }: {
                 {edges.map(edge => (
                   <EdgePath key={edge.id} edge={edge} nodes={nodes} selected={selectedEdge === edge.id} onClick={handleEdgeClick} />
                 ))}
+                {/* Pending edge preview */}
                 {pendingEdge && (
-                  <path d={bezier(pendingEdge.from, pendingEdge.mouse)} fill="none" stroke="#7B61FF" strokeWidth={2} strokeDasharray="7 4" />
+                  <path
+                    d={pendingEdge.isModel
+                      ? modelBezier(pendingEdge.from, pendingEdge.mouse)
+                      : bezier(pendingEdge.from, pendingEdge.mouse)}
+                    fill="none" stroke={pendingStroke} strokeWidth={2} strokeDasharray={pendingDash}
+                  />
                 )}
-                {nodes.map(node => (
-                  <WorkflowNode key={node.id} node={node} selected={selectedNode === node.id}
-                    onSelect={handleNodeSelect} onDrag={handleNodeDrag} onStartEdge={handleStartEdge} />
-                ))}
+                {(() => {
+                  // Set of node IDs that are the *target* of a model edge —
+                  // used to show the amber input port on model-provider nodes.
+                  const modelEdgeTargetIds = new Set(
+                    edges.filter(e => e.edgeType === "model").map(e => e.to)
+                  );
+                  return nodes.map(node => (
+                    <WorkflowNode key={node.id} node={node} selected={selectedNode === node.id}
+                      onSelect={handleNodeSelect} onDrag={handleNodeDrag}
+                      onStartEdge={handleStartEdge} onStartModelEdge={handleStartModelEdge}
+                      hasModelEdgeIn={modelEdgeTargetIds.has(node.id)}
+                    />
+                  ));
+                })()}
               </g>
             </svg>
             <div style={{ position: "absolute", bottom: 14, left: 14, display: "flex", gap: 8, pointerEvents: "none" }}>
@@ -821,6 +1103,7 @@ function WorkflowApp({ onLogout, profile }: {
             <div style={{ position: "absolute", bottom: 14, right: panelWidth + 14, background: "white", borderRadius: 8, padding: "5px 12px", border: "1px solid #E2E8F0", fontSize: 11, color: "#94A3B8", pointerEvents: "none", transition: "right 0.15s" }}>
               Drag <strong style={{ color: "#475569" }}>+</strong> port to connect · Right-click canvas to add · <kbd style={{ background: "#F1F5F9", padding: "1px 5px", borderRadius: 4, fontSize: 10 }}>Del</kbd> removes selected
             </div>
+
             {nodes.length === 0 && (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <div style={{ textAlign: "center", color: "#94A3B8" }}>
@@ -830,9 +1113,29 @@ function WorkflowApp({ onLogout, profile }: {
                 </div>
               </div>
             )}
+
+            {/* Toast */}
+            {toast && (
+              <div style={{
+                position: "absolute", bottom: 54, left: "50%", transform: "translateX(-50%)",
+                background: "#1E293B", color: "white", borderRadius: 8, padding: "9px 16px",
+                fontSize: 12, fontWeight: 600, boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+                pointerEvents: "none", whiteSpace: "nowrap", zIndex: 999,
+                display: "flex", alignItems: "center", gap: 8,
+              }}>
+                <span style={{ color: MODEL_EDGE_COLOR }}>⬡</span> {toast}
+              </div>
+            )}
           </div>
+
           {rightPanel === "node" && selNode && (
-            <NodePanel node={selNode} onClose={() => setRightPanel(null)} onUpdate={updateNode} onDelete={deleteNode} />
+            <NodePanel
+              node={selNode}
+              onClose={() => setRightPanel(null)}
+              onUpdate={updateNode}
+              onDelete={deleteNode}
+              connectedModelId={connectedModelNodeIdSource}
+            />
           )}
           {rightPanel === "edge" && selEdge && (
             <EdgePanel edge={selEdge} onClose={() => setRightPanel(null)} onUpdate={updateEdge} onDelete={deleteEdge} />
@@ -843,13 +1146,10 @@ function WorkflowApp({ onLogout, profile }: {
         </div>
       </div>
 
-      {/* ── Profile popover — fixed position so it escapes sidebar's overflow:hidden ── */}
+      {/* ── Profile popover ── */}
       {showProfile && popoverPos && (
         <>
-          <div style={{
-            position: "fixed", top: popoverPos.top, left: popoverPos.left - 14,
-            width: 14, height: 220, zIndex: 199,
-          }}
+          <div style={{ position: "fixed", top: popoverPos.top, left: popoverPos.left - 14, width: 14, height: 220, zIndex: 199 }}
             onMouseEnter={handleProfileEnter} onMouseLeave={handleProfileLeave}
           />
           <div style={{
