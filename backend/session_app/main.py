@@ -4,20 +4,22 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from session_app.config import settings
-from session_app.db.database import engine
-from session_app.models.models import Base
-from session_app.routers import auth, sessions, users
-import uvicorn
+from session_app.db.database import engine, frontend_engine
+from session_app.models.models import Base, FrontendBase
+from session_app.routers import auth, sessions, users, node_types
 
 # Manages application startup and shutdown — creates all DB tables on startup
-# and disposes of the engine connection pool on shutdown.
+# (main DB via Base, frontend DB via FrontendBase) and disposes both engine
+# connection pools on shutdown.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create all tables on startup (use Alembic migrations in production)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    async with frontend_engine.begin() as conn:
+        await conn.run_sync(FrontendBase.metadata.create_all)
     yield
     await engine.dispose()
+    await frontend_engine.dispose()
 
 
 app = FastAPI(
@@ -38,6 +40,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(sessions.router)
 app.include_router(users.router)
+app.include_router(node_types.router)
 
 # Health check endpoint that confirms the API is running and returns the current environment.
 @app.get("/health", tags=["health"])
