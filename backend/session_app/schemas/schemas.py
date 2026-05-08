@@ -88,3 +88,18 @@ class MessageResponse(BaseModel):
 # Generic response schema for returning an error detail string.
 class ErrorResponse(BaseModel):
     detail: str
+
+# ------------------------------------------------------------------
+# NodeType
+# ------------------------------------------------------------------
+# Response schema for a single node type returned by GET /node-types.
+# Maps directly from the NodeType ORM model via from_attributes.
+class NodeTypeResponse(BaseModel):
+    id: str
+    type: str
+    name: str
+    description: str
+    icon: str
+    sort_order: int
+
+    model_config = {"from_attributes": True}
