@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings
 # Includes database connection, session configuration, and environment mode.
 class Settings(BaseSettings):
     database_url: str
+    frontend_database_url: str
     secret_key: str
     session_cookie_name: str = "session_id"
     session_expire_minutes: int = 30
